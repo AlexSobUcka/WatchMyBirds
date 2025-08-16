@@ -1,16 +1,22 @@
 # Use a slim base image
-FROM python:3.12-bullseye
+FROM python:3.12-slim-bookworm
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    ffmpeg \
     libglib2.0-0 \
     libsm6 \
-    libxext6 \
-    libavcodec-extra \
-    libxrender-dev \
-    ffmpeg \
+    libavcodec-dev \
+    libavformat-dev \
+    libswscale-dev \
+    libopenjp2-7 \
     gosu \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    libxml2 \
+    libxslt1.1 && \
+    apt-get autoremove -y && \
+    apt-get autoclean -y && \
+    rm -rf /var/lib/apt/lists/*
 
 # Set environment variables
 ENV MPLCONFIGDIR=/tmp/matplotlib \
@@ -22,6 +28,10 @@ ENV MPLCONFIGDIR=/tmp/matplotlib \
 
 # Set the working directory
 WORKDIR /app
+
+ARG GIT_COMMIT
+ARG BUILD_DATE
+ARG VERSION
 
 # OCI image labels
 LABEL org.opencontainers.image.title="WatchMyBirds" \
@@ -54,6 +64,10 @@ COPY web ./web
 # Add the entrypoint script
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+
+# Clean up Python cache and compiled files
+RUN find /usr/local/lib/python3.12 -type d -name '__pycache__' -exec rm -rf {} + && \
+    find /usr/local/lib/python3.12 -type f -name '*.pyc' -delete
 
 # Expose the port used by your app
 EXPOSE 8050
