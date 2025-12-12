@@ -73,6 +73,8 @@ docker-compose up -d
 
 - **Modular Capture Pipeline**
   - Explicit start/stop control via `VideoCapture` and timestamped streaming through `FrameGenerator`
+- **Robust FFmpeg Lifecycle**
+  - PID-tracked start/stop with parent-death signal + shutdown hooks to prevent orphaned FFmpeg processes after crashes or restarts
 
 
 ---
@@ -211,4 +213,3 @@ This project uses **Label Studio** – provided free through the Academic Progra
 
 ## 📄 License
 This project is licensed under the MIT License. See the [`LICENSE`](LICENSE) file for details.
-

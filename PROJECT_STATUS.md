@@ -1,8 +1,8 @@
-# WatchMyBirds Pipeline - Migration Status
+# WatchMyBirds
 
 ## Current Status
 
-- Models are now automatically loaded from the Hugging Face repository.
+- ?
 
 ---
 
@@ -15,6 +15,7 @@
 ---
 
 ## Recent Changes
+- 2025-12-12: Hardened FFmpeg lifecycle to prevent orphaned processes and ensure clean restarts.
 - 2025-08-05: Introduction of MODEL_BASE_PATH for unified model storage.
 - 2025-08-05: Migration of model downloads to Hugging Face.
 - 2025-07-28: Branch created.

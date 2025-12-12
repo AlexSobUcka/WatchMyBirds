@@ -14,6 +14,11 @@ import threading
 from threading import Event
 import time
 import numpy as np
+import os
+import signal
+import sys
+import atexit
+import weakref
 from logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -29,6 +34,8 @@ class VideoCapture:
     WEBCAM = "webcam"
     BACKEND_OPENCV = "opencv"
     BACKEND_FFMPEG = "ffmpeg"
+    _instances = weakref.WeakSet()
+    _shutdown_hooks_registered = False
 
     def __init__(self, source, debug=False, auto_start=True):
         """
@@ -40,6 +47,7 @@ class VideoCapture:
         self.stop_event = Event()
         self.cap = None
         self.ffmpeg_process = None
+        self.ffmpeg_pid = None
         self.q = queue.Queue(maxsize=1)
         self.reader_thread = None
         self.last_frame_time = time.time()
@@ -58,6 +66,7 @@ class VideoCapture:
         logger.debug(
             f"Initialized VideoCapture with source: {self.source}, stream_type: {self.stream_type}"
         )
+        self._register_instance_for_shutdown()
         if auto_start:
             self.start()
 
@@ -138,6 +147,9 @@ class VideoCapture:
                 return
             logger.warning("Initial test frame still missing. Proceeding anyway to allow stream startup on slow devices (e.g., NAS).")
             if self.backend == self.BACKEND_FFMPEG:
+                self._terminate_ffmpeg_process(
+                    reason="switching backend after missing initial frame"
+                )
                 if self.cap:
                     self.cap.release()
                 self._setup_opencv_rtsp()
@@ -166,6 +178,7 @@ class VideoCapture:
         self.backend = self.BACKEND_OPENCV
 
     def _setup_ffmpeg(self):
+        self._terminate_ffmpeg_process(reason="preparing new FFmpeg start")
         ffmpeg_cmd = [
             "ffmpeg",
             "-fflags",
@@ -193,12 +206,17 @@ class VideoCapture:
         for attempt in range(5):  # Retry up to 5 times
             try:
                 logger.debug(f"Starting FFmpeg process (attempt {attempt + 1})...")
+                preexec_fn = self._make_ffmpeg_preexec_fn()
                 self.ffmpeg_process = subprocess.Popen(
                     ffmpeg_cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     bufsize=10**8,
+                    preexec_fn=preexec_fn,
+                    start_new_session=preexec_fn is None,
                 )
+                self.ffmpeg_pid = self.ffmpeg_process.pid
+                logger.info(f"FFmpeg process started with pid {self.ffmpeg_pid}.")
                 logger.debug("FFmpeg process started successfully.")
 
                 # Start logging FFmpeg errors if in debug mode
@@ -217,18 +235,77 @@ class VideoCapture:
                 return  # Exit loop on success
             except Exception as e:
                 logger.error(f"Failed to start FFmpeg process: {e}. Retrying...")
+                self._terminate_ffmpeg_process(reason="failed FFmpeg start")
                 time.sleep(2**attempt)  # Exponential backoff
         error_msg = "Failed to start FFmpeg after multiple attempts."
         logger.error(error_msg)
         raise RuntimeError(error_msg)
+
+    def _terminate_ffmpeg_process(self, reason=""):
+        """Beendet laufenden FFmpeg-Prozess inklusive Prozessgruppe."""
+        if not self.ffmpeg_process:
+            return
+
+        pid = self.ffmpeg_pid or self.ffmpeg_process.pid
+        reason_suffix = f" ({reason})" if reason else ""
+        logger.info(f"Stopping FFmpeg process{reason_suffix} (pid {pid}).")
+
+        try:
+            if self.ffmpeg_process.poll() is None:
+                if hasattr(os, "killpg"):
+                    try:
+                        os.killpg(self.ffmpeg_process.pid, signal.SIGTERM)
+                    except Exception as term_error:
+                        logger.debug(
+                            f"SIGTERM process group failed: {term_error}; "
+                            "falling back to terminate()."
+                        )
+                        self.ffmpeg_process.terminate()
+                else:
+                    self.ffmpeg_process.terminate()
+
+                try:
+                    self.ffmpeg_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    logger.warning(
+                        "FFmpeg did not terminate after SIGTERM, sending SIGKILL."
+                    )
+                    if hasattr(os, "killpg"):
+                        try:
+                            os.killpg(self.ffmpeg_process.pid, signal.SIGKILL)
+                        except Exception as kill_error:
+                            logger.error(
+                                f"Failed to kill FFmpeg process group: {kill_error}"
+                            )
+                    else:
+                        self.ffmpeg_process.kill()
+                    try:
+                        self.ffmpeg_process.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        logger.error(
+                            "FFmpeg process did not exit after SIGKILL attempt."
+                        )
+        finally:
+            for stream in (self.ffmpeg_process.stdout, self.ffmpeg_process.stderr):
+                try:
+                    if stream:
+                        stream.close()
+                except Exception:
+                    pass
+            self.ffmpeg_process = None
+            self.ffmpeg_pid = None
 
     def _log_ffmpeg_errors(self):
         """
         Continuously logs FFmpeg's stderr for debugging purposes, only if debug mode is enabled.
         """
         logger.debug("Starting FFmpeg stderr logging.")
+        process = self.ffmpeg_process
+        if not process or not process.stderr:
+            logger.debug("FFmpeg stderr stream not available for logging.")
+            return
         try:
-            for line in iter(self.ffmpeg_process.stderr.readline, b""):
+            for line in iter(process.stderr.readline, b""):
                 if line:
                     logger.debug(f"FFmpeg STDERR: {line.decode('utf-8').strip()}")
                 if self.stop_event.is_set():
@@ -552,15 +629,8 @@ class VideoCapture:
             # Release resources
             if self.cap:
                 self.cap.release()
-            if self.ffmpeg_process:
-                self.ffmpeg_process.terminate()
-                try:
-                    self.ffmpeg_process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    self.ffmpeg_process.kill()
-
+            self._terminate_ffmpeg_process(reason="codec switch")
             self.cap = None
-            self.ffmpeg_process = None
 
             # Short pause to let codec change settle
             time.sleep(1)
@@ -583,8 +653,12 @@ class VideoCapture:
         frame_size = (
             self.stream_width * self.stream_height * 3
         )  # For bgr24 (3 bytes per pixel)
+        process = self.ffmpeg_process
+        if not process or process.poll() is not None:
+            logger.warning("FFmpeg process unavailable while attempting to read frame.")
+            return None
         try:
-            raw_frame = self.ffmpeg_process.stdout.read(frame_size)
+            raw_frame = process.stdout.read(frame_size)
             if len(raw_frame) != frame_size:
                 actual_size = len(raw_frame)
                 # New block: handle empty frame
@@ -739,19 +813,7 @@ class VideoCapture:
         else:
             logger.info("Skipping join on current thread (health check thread).")
 
-        if self.ffmpeg_process:
-            logger.info("Terminating FFmpeg process...")
-            self.ffmpeg_process.terminate()
-            try:
-                self.ffmpeg_process.wait(timeout=5)
-                logger.info("FFmpeg process terminated gracefully.")
-            except subprocess.TimeoutExpired:
-                logger.info(
-                    "FFmpeg process did not terminate in time. Killing process..."
-                )
-                self.ffmpeg_process.kill()
-                logger.info("FFmpeg process killed.")
-            self.ffmpeg_process = None
+        self._terminate_ffmpeg_process(reason="stop()")
 
         if self.cap:
             logger.info("Releasing OpenCV VideoCapture.")
@@ -759,6 +821,77 @@ class VideoCapture:
             self.cap = None
 
         logger.info("Resources released.")
+
+    def _register_instance_for_shutdown(self):
+        """
+        Registriert Instanz für globale Aufräumroutinen (atexit / Signals).
+        """
+        VideoCapture._instances.add(self)
+        if VideoCapture._shutdown_hooks_registered:
+            return
+        VideoCapture._shutdown_hooks_registered = True
+        atexit.register(VideoCapture._terminate_all_instances)
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                previous = signal.getsignal(sig)
+
+                def handler(signum, frame, prev=previous):
+                    VideoCapture._terminate_all_instances()
+                    if callable(prev) and prev not in (
+                        signal.SIG_IGN,
+                        signal.SIG_DFL,
+                    ):
+                        try:
+                            prev(signum, frame)
+                        except Exception:
+                            pass
+
+                signal.signal(sig, handler)
+            except Exception as signal_error:
+                logger.debug(f"Could not register shutdown handler for {sig}: {signal_error}")
+
+    @classmethod
+    def _terminate_all_instances(cls):
+        """Räumt alle bekannten FFmpeg-Prozesse auf (z. B. bei atexit)."""
+        for instance in list(cls._instances):
+            try:
+                instance._terminate_ffmpeg_process(reason="shutdown hook")
+            except Exception as cleanup_error:
+                logger.debug(f"Failed to terminate FFmpeg during shutdown: {cleanup_error}")
+
+    def _make_ffmpeg_preexec_fn(self):
+        """
+        Erstellt preexec-Funktion, die eine eigene Session startet und einen
+        Parent-Death-Signal-Handler auf Linux setzt.
+        """
+        if os.name != "posix":
+            return None
+
+        def preexec():
+            try:
+                os.setsid()  # eigener Prozessgruppe für gezielte Signale
+            except Exception:
+                pass
+            self._set_parent_death_signal()
+
+        return preexec
+
+    def _set_parent_death_signal(self):
+        """
+        Setzt auf Linux PR_SET_PDEATHSIG, damit FFmpeg beendet wird,
+        wenn der Python-Prozess unerwartet stirbt.
+        """
+        if os.name != "posix":
+            return
+        try:
+            import ctypes
+
+            libc = ctypes.CDLL("libc.so.6")
+            PR_SET_PDEATHSIG = 1
+            libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM)
+            logger.debug("Configured PR_SET_PDEATHSIG(SIGTERM) for FFmpeg child.")
+        except Exception as prctl_error:
+            logger.debug(f"Could not set PR_SET_PDEATHSIG: {prctl_error}")
 
     @property
     def resolution(self):
