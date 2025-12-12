@@ -75,6 +75,8 @@ docker-compose up -d
   - Explicit start/stop control via `VideoCapture` and timestamped streaming through `FrameGenerator`
 - **Robust FFmpeg Lifecycle**
   - PID-tracked start/stop with parent-death signal + shutdown hooks to prevent orphaned FFmpeg processes after crashes or restarts
+- **Stream Settings Cache**
+  - First successful stream probe is persisted (`output/stream_settings.json` with validation: URL, stream type, FFmpeg version); cache writes are atomic and reused at restart to skip probing
 
 
 ---

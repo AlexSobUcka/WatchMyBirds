@@ -19,6 +19,8 @@ import signal
 import sys
 import atexit
 import weakref
+import json
+from pathlib import Path
 from logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -36,6 +38,7 @@ class VideoCapture:
     BACKEND_FFMPEG = "ffmpeg"
     _instances = weakref.WeakSet()
     _shutdown_hooks_registered = False
+    _ffmpeg_version_cache = None
 
     def __init__(self, source, debug=False, auto_start=True):
         """
@@ -48,6 +51,8 @@ class VideoCapture:
         self.cap = None
         self.ffmpeg_process = None
         self.ffmpeg_pid = None
+        self.stream_width = None
+        self.stream_height = None
         self.q = queue.Queue(maxsize=1)
         self.reader_thread = None
         self.last_frame_time = time.time()
@@ -62,11 +67,15 @@ class VideoCapture:
         self.last_codec_switch_time = 0
         self.codec_switch_cooldown = 10  # seconds between codec switch attempts
         self.backend_switch_cooldown = 15  # seconds between backend switches
+        self.stream_settings_loaded = False
+        self._cache_reuse_failed_once = False
+        self.runtime_resolution_lock = threading.Lock()
 
         logger.debug(
             f"Initialized VideoCapture with source: {self.source}, stream_type: {self.stream_type}"
         )
         self._register_instance_for_shutdown()
+        self._prime_stream_settings_from_cache()
         if auto_start:
             self.start()
 
@@ -76,9 +85,34 @@ class VideoCapture:
             logger.info("VideoCapture already running.")
             return
         if self.stream_type == self.RTSP:
-            self._get_stream_resolution_ffprobe()
-            logger.info(f"Initial resolution: {self.resolution}")
-        self._setup_capture()
+            if not self.stream_settings_loaded:
+                self._get_stream_resolution_ffprobe()
+                logger.info(f"Initial resolution: {self.resolution}")
+            else:
+                logger.info(
+                    f"Loaded cached stream settings: resolution={self.resolution}"
+                )
+        try:
+            self._setup_capture()
+        except Exception as start_error:
+            if (
+                self.stream_type == self.RTSP
+                and self.stream_settings_loaded
+                and not self._cache_reuse_failed_once
+            ):
+                logger.warning(
+                    "Cached stream settings failed to start. "
+                    "Invalidating cache and retrying with probing."
+                )
+                self._cache_reuse_failed_once = True
+                self._invalidate_cache_entry()
+                self.stream_settings_loaded = False
+                self.stream_width = None
+                self.stream_height = None
+                self._get_stream_resolution_ffprobe()
+                self._setup_capture()
+            else:
+                raise start_error
         self._start_reader_thread()
         self._start_health_check_thread()
 
@@ -175,6 +209,7 @@ class VideoCapture:
         logger.info(
             f"OpenCV RTSP setup successful: {self.stream_width}x{self.stream_height}"
         )
+        self._persist_stream_settings()
         self.backend = self.BACKEND_OPENCV
 
     def _setup_ffmpeg(self):
@@ -243,50 +278,51 @@ class VideoCapture:
 
     def _terminate_ffmpeg_process(self, reason=""):
         """Beendet laufenden FFmpeg-Prozess inklusive Prozessgruppe."""
-        if not self.ffmpeg_process:
+        process = self.ffmpeg_process
+        if not process:
             return
 
-        pid = self.ffmpeg_pid or self.ffmpeg_process.pid
+        pid = self.ffmpeg_pid or process.pid
         reason_suffix = f" ({reason})" if reason else ""
         logger.info(f"Stopping FFmpeg process{reason_suffix} (pid {pid}).")
 
         try:
-            if self.ffmpeg_process.poll() is None:
+            if process.poll() is None:
                 if hasattr(os, "killpg"):
                     try:
-                        os.killpg(self.ffmpeg_process.pid, signal.SIGTERM)
+                        os.killpg(process.pid, signal.SIGTERM)
                     except Exception as term_error:
                         logger.debug(
                             f"SIGTERM process group failed: {term_error}; "
                             "falling back to terminate()."
                         )
-                        self.ffmpeg_process.terminate()
+                        process.terminate()
                 else:
-                    self.ffmpeg_process.terminate()
+                    process.terminate()
 
                 try:
-                    self.ffmpeg_process.wait(timeout=5)
+                    process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     logger.warning(
                         "FFmpeg did not terminate after SIGTERM, sending SIGKILL."
                     )
                     if hasattr(os, "killpg"):
                         try:
-                            os.killpg(self.ffmpeg_process.pid, signal.SIGKILL)
+                            os.killpg(process.pid, signal.SIGKILL)
                         except Exception as kill_error:
                             logger.error(
                                 f"Failed to kill FFmpeg process group: {kill_error}"
                             )
                     else:
-                        self.ffmpeg_process.kill()
+                        process.kill()
                     try:
-                        self.ffmpeg_process.wait(timeout=3)
+                        process.wait(timeout=3)
                     except subprocess.TimeoutExpired:
                         logger.error(
                             "FFmpeg process did not exit after SIGKILL attempt."
                         )
         finally:
-            for stream in (self.ffmpeg_process.stdout, self.ffmpeg_process.stderr):
+            for stream in (process.stdout, process.stderr):
                 try:
                     if stream:
                         stream.close()
@@ -294,6 +330,147 @@ class VideoCapture:
                     pass
             self.ffmpeg_process = None
             self.ffmpeg_pid = None
+
+    def _stream_settings_path(self):
+        """Returns the path for persisted stream settings."""
+        try:
+            output_dir = Path(config.get("OUTPUT_DIR", "/output"))
+        except Exception:
+            output_dir = Path("/output")
+        return output_dir / "stream_settings.json"
+
+    def _get_ffmpeg_version(self):
+        """Liest die FFmpeg-Version zur Cache-Validierung."""
+        if VideoCapture._ffmpeg_version_cache is not None:
+            return VideoCapture._ffmpeg_version_cache
+        try:
+            output = subprocess.check_output(
+                ["ffmpeg", "-version"], stderr=subprocess.STDOUT
+            )
+            first_line = output.decode().splitlines()[0]
+            VideoCapture._ffmpeg_version_cache = first_line.strip()
+        except Exception as version_error:
+            logger.debug(f"Could not determine FFmpeg version: {version_error}")
+            VideoCapture._ffmpeg_version_cache = None
+        return VideoCapture._ffmpeg_version_cache
+
+    def _load_stream_settings_from_cache(self):
+        """Reads cached stream settings for the current source."""
+        cache_path = self._stream_settings_path()
+        if not cache_path.exists():
+            return None
+        try:
+            data = json.loads(cache_path.read_text())
+            return data.get(str(self.source))
+        except Exception as cache_error:
+            logger.debug(f"Could not read stream settings cache: {cache_error}")
+            return None
+
+    def _prime_stream_settings_from_cache(self):
+        """Loads cached settings into memory to skip probing."""
+        cached = self._load_stream_settings_from_cache()
+        if not cached:
+            return
+        try:
+            if not self._cache_metadata_matches(cached):
+                logger.info("Stream settings cache ignored due to metadata mismatch.")
+                return
+            self.stream_width = int(cached["width"])
+            self.stream_height = int(cached["height"])
+            self.stream_settings_loaded = True
+            logger.info(
+                f"Cache loaded for source {self.source}: "
+                f"{self.stream_width}x{self.stream_height}"
+            )
+        except Exception as cache_error:
+            logger.debug(f"Invalid cached stream settings: {cache_error}")
+
+    def _cache_metadata_matches(self, cached):
+        """Validates cached metadata (stream URL, type, FFmpeg version)."""
+        try:
+            if str(cached.get("stream_url")) != str(self.source):
+                logger.info("Stream settings cache ignored (URL changed).")
+                return False
+            if cached.get("stream_type") != self.stream_type:
+                logger.info("Stream settings cache ignored (stream type changed).")
+                return False
+            cached_version = cached.get("ffmpeg_version")
+            current_version = self._get_ffmpeg_version()
+            if cached_version and current_version and cached_version != current_version:
+                logger.info("Stream settings cache ignored (FFmpeg version changed).")
+                return False
+            return True
+        except Exception as metadata_error:
+            logger.debug(f"Cache metadata validation failed: {metadata_error}")
+            return False
+
+    def _persist_stream_settings(self):
+        """Persists discovered stream settings to speed up future startups."""
+        if (
+            not hasattr(self, "stream_width")
+            or not hasattr(self, "stream_height")
+            or self.stream_width is None
+            or self.stream_height is None
+        ):
+            return
+        if self.stop_event.is_set() or self.stop_flag:
+            logger.debug("Skipping stream settings persist during shutdown.")
+            return
+        cache_path = self._stream_settings_path()
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            data = {}
+            if cache_path.exists():
+                try:
+                    data = json.loads(cache_path.read_text())
+                except Exception:
+                    data = {}
+            data[str(self.source)] = {
+                "stream_type": self.stream_type,
+                "stream_url": str(self.source),
+                "width": int(self.stream_width),
+                "height": int(self.stream_height),
+                "ffmpeg_version": self._get_ffmpeg_version(),
+                "cached_at": time.time(),
+            }
+            self._write_cache_atomically(cache_path, data)
+            logger.info(
+                f"Cache overwritten for source {self.source}: "
+                f"{self.stream_width}x{self.stream_height} -> {cache_path}"
+            )
+        except Exception as cache_error:
+            logger.debug(f"Failed to persist stream settings: {cache_error}")
+
+    def _write_cache_atomically(self, cache_path, data):
+        """Writes cache atomically using a temp file and fsync."""
+        tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as tmp_file:
+                json.dump(data, tmp_file, indent=2)
+                tmp_file.flush()
+                os.fsync(tmp_file.fileno())
+            tmp_path.replace(cache_path)
+        except Exception:
+            # Best-effort cleanup; ignore failure.
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise
+
+    def _invalidate_cache_entry(self):
+        """Removes cached settings for the current source."""
+        cache_path = self._stream_settings_path()
+        if not cache_path.exists():
+            return
+        try:
+            data = json.loads(cache_path.read_text())
+            if str(self.source) in data:
+                data.pop(str(self.source), None)
+                self._write_cache_atomically(cache_path, data)
+                logger.info("Stream settings cache entry removed for current source.")
+        except Exception as cache_error:
+            logger.debug(f"Failed to invalidate cache entry: {cache_error}")
 
     def _log_ffmpeg_errors(self):
         """
@@ -344,6 +521,7 @@ class VideoCapture:
             self.stream_width = width
             self.stream_height = height
             logger.debug(f"Detected stream resolution via FFprobe: {width}x{height}")
+            self._persist_stream_settings()
             return
         except Exception as ffprobe_error:
             logger.warning(f"FFprobe failed: {ffprobe_error}. Falling back to FFmpeg stderr parsing.")
@@ -383,6 +561,7 @@ class VideoCapture:
                 self.stream_height = int(match.group(2))
                 logger.info(f"FFmpeg fallback successfully detected resolution: {self.stream_width}x{self.stream_height}")
                 logger.debug(f"Detected stream resolution via FFmpeg fallback: {self.stream_width}x{self.stream_height}")
+                self._persist_stream_settings()
             else:
                 raise RuntimeError("FFmpeg did not return a parsable resolution.")
         except Exception as ffmpeg_error:
@@ -410,6 +589,7 @@ class VideoCapture:
         logger.info(
             f"Detected HTTP stream resolution: {self.stream_width}x{self.stream_height}"
         )
+        self._persist_stream_settings()
 
     def _setup_webcam(self):
         """
@@ -430,6 +610,7 @@ class VideoCapture:
         logger.info(
             f"Detected Webcam resolution: {self.stream_width}x{self.stream_height}"
         )
+        self._persist_stream_settings()
 
     def _start_reader_thread(self):
         """
@@ -624,6 +805,9 @@ class VideoCapture:
         """
         Handles RTSP codec switches gracefully without triggering full reinitialization loops.
         """
+        if self.stop_event.is_set() or self.stop_flag:
+            logger.debug("Skipping codec switch handling during shutdown.")
+            return
         logger.info("Detected potential codec switch. Attempting fast reconnection...")
         try:
             # Release resources
@@ -649,6 +833,55 @@ class VideoCapture:
             logger.error(f"Codec switch handling failed: {e}")
             self._reinitialize_camera(reason="Codec switch recovery failed")
 
+    def _handle_runtime_resolution_change(self, new_width, new_height, reason=""):
+        """
+        Reconnects FFmpeg when runtime resolution changes to keep buffer aligned.
+        """
+        if self.stop_event.is_set() or self.stop_flag:
+            logger.debug("Skipping runtime resolution change handling during shutdown.")
+            return
+        if not self.runtime_resolution_lock.acquire(blocking=False):
+            logger.debug("Skipping runtime resolution change handling (already running).")
+            return
+        try:
+            # If we lack explicit new dimensions, re-probe with ffprobe.
+            if new_width is None or new_height is None:
+                try:
+                    logger.info("Runtime resolution change detected; re-probing stream resolution via ffprobe.")
+                    self._get_stream_resolution_ffprobe()
+                    new_width = self.stream_width
+                    new_height = self.stream_height
+                except Exception as probe_error:
+                    logger.error(
+                        f"Failed to re-probe stream resolution after change: {probe_error}"
+                    )
+                    self._invalidate_cache_entry()
+                    return
+
+            reason_suffix = f" ({reason})" if reason else ""
+            logger.info(
+                f"Runtime resolution change detected{reason_suffix}: "
+                f"{self.stream_width}x{self.stream_height} -> {new_width}x{new_height}"
+            )
+            self.stream_width = new_width
+            self.stream_height = new_height
+            self._persist_stream_settings()
+
+            if self.stream_type == self.RTSP and self.backend == self.BACKEND_FFMPEG:
+                self._terminate_ffmpeg_process(reason="runtime resolution change")
+                try:
+                    self._setup_ffmpeg()
+                    logger.info("FFmpeg restarted after runtime resolution change.")
+                except Exception as restart_error:
+                    logger.error(
+                        f"Failed to restart FFmpeg after runtime resolution change: {restart_error}"
+                    )
+                    self._reinitialize_camera(
+                        reason="FFmpeg restart after resolution change failed"
+                    )
+        finally:
+            self.runtime_resolution_lock.release()
+
     def _read_ffmpeg_frame(self):
         frame_size = (
             self.stream_width * self.stream_height * 3
@@ -656,6 +889,8 @@ class VideoCapture:
         process = self.ffmpeg_process
         if not process or process.poll() is not None:
             logger.warning("FFmpeg process unavailable while attempting to read frame.")
+            return None
+        if self.stop_event.is_set() or self.stop_flag:
             return None
         try:
             raw_frame = process.stdout.read(frame_size)
@@ -674,38 +909,11 @@ class VideoCapture:
                 logger.warning(
                     f"FFmpeg produced incomplete frame: expected {frame_size} bytes, got {actual_size} bytes."
                 )
-                # Try to infer resolution from actual bytes if possible
-                if actual_size % 3 == 0:
-                    pixels = actual_size // 3
-                    new_height = int(np.sqrt(pixels))
-                    new_width = (
-                        pixels // new_height if new_height else self.stream_width
-                    )
-                    if (
-                        new_width > 0
-                        and new_height > 0
-                        and (
-                            new_width != self.stream_width
-                            or new_height != self.stream_height
-                        )
-                    ):
-                        logger.info(
-                            f"Adjusting resolution dynamically from {self.stream_width}x{self.stream_height} "
-                            f"to {new_width}x{new_height} based on FFmpeg output."
-                        )
-                        self.stream_width = new_width
-                        self.stream_height = new_height
-                        frame_size = actual_size
-                        try:
-                            frame = np.frombuffer(raw_frame, np.uint8).reshape(
-                                (self.stream_height, self.stream_width, 3)
-                            )
-                            self.last_frame_time = time.time()
-                            return frame
-                        except Exception as reshape_err:
-                            logger.error(
-                                f"Failed to reshape frame with inferred resolution {new_width}x{new_height}: {reshape_err}"
-                            )
+                self._handle_runtime_resolution_change(
+                    None,
+                    None,
+                    reason="FFmpeg output size changed",
+                )
                 return None
             frame = np.frombuffer(raw_frame, np.uint8).reshape(
                 (self.stream_height, self.stream_width, 3)
