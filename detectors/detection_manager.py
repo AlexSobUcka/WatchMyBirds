@@ -25,6 +25,7 @@ import os
 import csv
 import json
 import hashlib
+import queue
 
 """
 This module defines the DetectionManager class, which orchestrates video frame acquisition,
@@ -197,6 +198,7 @@ class DetectionManager:
         # Video capture and detector instances.
         self.video_capture = None
         self.detector_instance = None
+        self.processing_queue = queue.Queue(maxsize=1)
 
         # Set up output directory
         self.output_dir = self.config["OUTPUT_DIR"]
@@ -211,6 +213,9 @@ class DetectionManager:
         )
         self.detection_thread = threading.Thread(
             target=self._detection_loop, daemon=True
+        )
+        self.processing_thread = threading.Thread(
+            target=self._processing_loop, daemon=True
         )
 
     # >>> Daytime Check Function >>>
@@ -443,330 +448,13 @@ class DetectionManager:
                 self.latest_detection_time = time.time()
 
             if object_detected:
-                timestamp_str = capture_time_precise.strftime("%Y%m%d_%H%M%S")
-                # Determine the subfolder for the current day, e.g., "20250318"
-                day_folder = os.path.join(self.output_dir, timestamp_str[:8])
-                os.makedirs(day_folder, exist_ok=True)
-                csv_path = os.path.join(day_folder, "images.csv")
-
-                # Finds the best detection's class.
-                best_det = max(detection_info_list, key=lambda d: d["confidence"])
-                best_class = best_det[
-                    "class_name"
-                ]  # e.g., "Eurasian Blue Tit" --> "Eurasian_Blue_Tit"
-                best_class_sanitized = re.sub(r"[^A-Za-z0-9_-]+", "_", best_class)
-                best_class_conf = best_det["confidence"]
-
-                # Includes the class name in filename
-                original_name = f"{timestamp_str}_{best_class_sanitized}_original.jpg"
-                optimized_name = f"{timestamp_str}_{best_class_sanitized}_optimized.jpg"
-                zoomed_name = f"{timestamp_str}_{best_class_sanitized}_zoomed.jpg"
-
-                original_path = os.path.join(day_folder, original_name)
-                optimized_path = os.path.join(day_folder, optimized_name)
-                zoomed_path = os.path.join(day_folder, zoomed_name)
-
-                # Generate COCO formatted detection information.
-                image_id = int(timestamp_str.replace("_", ""))
-                image_info = {
-                    "id": image_id,
-                    "file_name": original_name,
-                    "width": original_frame.shape[1],
-                    "height": original_frame.shape[0],
-                }
-                annotations = []
-                for i, det in enumerate(detection_info_list, start=1):
-                    x1, y1, x2, y2 = det["x1"], det["y1"], det["x2"], det["y2"]
-                    bbox = [x1, y1, x2 - x1, y2 - y1]  # [x, y, width, height] # COCO
-                    area = (x2 - x1) * (y2 - y1)
-                    # Assign a dummy category_id: use 7 if the class matches best_class_sanitized, else 1.
-                    category_id = (
-                        7
-                        if det["class_name"].replace(" ", "_") == best_class_sanitized
-                        else 1
-                    )
-                    annotations.append(
-                        {
-                            "id": image_id * 100 + i,
-                            "image_id": image_id,
-                            "category_id": category_id,
-                            "bbox": bbox,
-                            "area": area,
-                            "iscrowd": 0,
-                        }
-                    )
-                categories = []
-                unique_categories = {}
-                for det in detection_info_list:
-                    cat_name = det["class_name"].replace(" ", "_")
-                    if cat_name not in unique_categories:
-                        cat_id = 7 if cat_name == best_class_sanitized else 1
-                        unique_categories[cat_name] = cat_id
-                        categories.append({"id": cat_id, "name": cat_name})
-                coco_detection = {
-                    "annotations": annotations,
-                    "images": [image_info],
-                    "categories": categories,
-                }
-                coco_json = json.dumps(coco_detection)
-
-                # Saves the original full-resolution image (for download and analysis).
-                try:
-                    save_success_original = cv2.imwrite(original_path, original_frame)
-                    if save_success_original:
-                        add_exif_metadata(
-                            original_path, capture_time_precise, self.location_config
-                        )
-                    else:
-                        logger.error(
-                            f"Failed to save original image (imwrite returned false): {original_path}"
-                        )
-                except Exception as e:
-                    logger.error(f"Error during original image saving/EXIF: {e}")
-                    save_success_original = False  # Ensure flag is False on exception
-
-                # Generates an optimized version of the original image for display.
-                try:
-                    if original_frame.shape[1] > 800:
-                        optimized_frame = cv2.resize(
-                            original_frame,
-                            (
-                                800,
-                                int(
-                                    original_frame.shape[0]
-                                    * 800
-                                    / original_frame.shape[1]
-                                ),
-                            ),
-                        )
-                        save_success_optimized = cv2.imwrite(
-                            optimized_path,
-                            optimized_frame,
-                            [int(cv2.IMWRITE_JPEG_QUALITY), 70],
-                        )
-                    else:
-                        save_success_optimized = cv2.imwrite(
-                            optimized_path,
-                            original_frame,
-                            [int(cv2.IMWRITE_JPEG_QUALITY), 70],
-                        )
-
-                    if save_success_optimized:
-                        add_exif_metadata(
-                            optimized_path, capture_time_precise, self.location_config
-                        )
-                    else:
-                        logger.error(
-                            f"Failed to save optimized image: {optimized_path}"
-                        )
-                except cv2.error as e:
-                    logger.error(
-                        f"OpenCV error during optimized image processing/saving: {e}"
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Unexpected error during optimized image processing/saving: {e}"
-                    )
-
-                # Generates the zoomed version based on the detection with the highest confidence using create_square_crop()
-                top1_class_name = ""
-                top1_confidence = ""
-                if detection_info_list:
-                    try:
-                        bbox = (
-                            best_det["x1"],
-                            best_det["y1"],
-                            best_det["x2"],
-                            best_det["y2"],
-                        )
-                        zoomed_frame_raw = self.create_square_crop(
-                            original_frame, bbox, margin_percent=0.1
-                        )
-
-                        if zoomed_frame_raw is not None and zoomed_frame_raw.size > 0:
-                            zoomed_frame = cv2.resize(
-                                zoomed_frame_raw,
-                                (
-                                    self.SAVE_RESOLUTION_ZOOMED,
-                                    self.SAVE_RESOLUTION_ZOOMED,
-                                ),
-                            )
-
-                            # Performs classification.
-                            try:
-                                zoomed_frame_rgb = cv2.cvtColor(
-                                    zoomed_frame, cv2.COLOR_BGR2RGB
-                                )
-                                _, _, top1_class_name, top1_confidence = (
-                                    self.classifier.predict_from_image(zoomed_frame_rgb)
-                                )
-                            except Exception as e:
-                                logger.error(f"Classification failed: {e}")
-                                top1_class_name = (
-                                    "CLASSIFICATION_ERROR"  # Mark error in CSV
-                                )
-                                top1_confidence = 0.0
-
-                            # Saves the zoomed image.
-                            save_success_zoomed = cv2.imwrite(
-                                zoomed_path,
-                                zoomed_frame,
-                                [int(cv2.IMWRITE_JPEG_QUALITY), 70],
-                            )
-                            if save_success_zoomed:
-                                add_exif_metadata(
-                                    zoomed_path,
-                                    capture_time_precise,
-                                    self.location_config,
-                                )
-                                actual_zoomed_path = (
-                                    zoomed_path  # Store path only if save succeeded
-                                )
-                            else:
-                                logger.error(
-                                    f"Failed to save zoomed image: {zoomed_path}"
-                                )
-                        else:
-                            logger.warning(
-                                "Zoomed frame generation failed or resulted in empty image. Skipping save."
-                            )
-                            zoomed_name = ""  # Indicate zoomed was not created in CSV
-
-                    except cv2.error as e:
-                        logger.error(
-                            f"OpenCV error during zoomed image processing/saving: {e}"
-                        )
-                        zoomed_name = ""  # Indicate zoomed was not created in CSV
-                    except Exception as e:
-                        logger.error(
-                            f"Unexpected error during zoomed image processing/saving: {e}"
-                        )
-                        zoomed_name = ""  # Indicate zoomed was not created in CSV
-
-                logger.debug(
-                    f"Classification Result: {top1_class_name} - {top1_confidence}"
+                self._enqueue_processing_job(
+                    {
+                        "capture_time_precise": capture_time_precise,
+                        "original_frame": original_frame,
+                        "detection_info_list": detection_info_list,
+                    }
                 )
-
-                # Writes image metadata and classification result to CSV (append mode).
-                try:
-                    file_exists = (
-                        os.path.exists(csv_path) and os.stat(csv_path).st_size > 0
-                    )
-                    with open(csv_path, mode="a", newline="", encoding="utf-8") as f:
-                        writer = csv.writer(f)
-                        if not file_exists:
-                            writer.writerow(
-                                [
-                                    "timestamp",
-                                    "original_name",
-                                    "optimized_name",
-                                    "zoomed_name",
-                                    "best_class",
-                                    "best_class_conf",
-                                    "top1_class_name",
-                                    "top1_confidence",
-                                    "coco_json",
-                                ]
-                            )
-                        # Use potentially updated zoomed_name (empty if failed)
-                        writer.writerow(
-                            [
-                                timestamp_str,
-                                original_name,
-                                optimized_name,
-                                zoomed_name,
-                                best_class_sanitized,
-                                best_class_conf,
-                                top1_class_name,
-                                top1_confidence,
-                                coco_json,
-                            ]
-                        )
-                except IOError as e:
-                    logger.error(f"Error writing to CSV {csv_path}: {e}")
-
-                self.detection_occurred = True
-                self.detection_counter += len(detection_info_list)
-                self.detection_classes_agg.update(
-                    det["class_name"] for det in detection_info_list
-                )
-
-                # Telegram notification.
-                current_time = time.time()
-                cooldown = self.config.get(
-                    "TELEGRAM_COOLDOWN", 60
-                )  # Use .get() for safety
-
-                # Checks if cooldown has passed before acquiring lock for efficiency
-                if self.detection_occurred and (
-                    current_time - self.last_notification_time >= cooldown
-                ):
-                    with self.telegram_lock:
-                        # Double-checks condition inside lock to prevent race condition
-                        if self.detection_occurred and (
-                            current_time - self.last_notification_time >= cooldown
-                        ):
-                            aggregated_classes = ", ".join(
-                                sorted(self.detection_classes_agg)
-                            )
-                            alert_text = (
-                                f"🔎 Detection Alert!\n"
-                                f"Detected: {aggregated_classes}\n"  # Simplified text slightly
-                                f"Total ({len(detection_info_list)} new / {self.detection_counter} since last alert)"
-                            )
-
-                            # Determines best photo to send, checks existence.
-                            photo_to_send = None
-                            if actual_zoomed_path and os.path.exists(
-                                actual_zoomed_path
-                            ):
-                                photo_to_send = actual_zoomed_path
-                            elif save_success_optimized and os.path.exists(
-                                optimized_path
-                            ):  # Check flag and existence
-                                photo_to_send = optimized_path
-                            elif save_success_original and os.path.exists(
-                                original_path
-                            ):  # Check flag and existence
-                                photo_to_send = original_path
-
-                            if photo_to_send:
-                                try:
-                                    send_telegram_message(
-                                        text=alert_text, photo_path=photo_to_send
-                                    )  # Actual call
-                                    logger.info(
-                                        f"(Simulated) Telegram notification sent: {alert_text} with {os.path.basename(photo_to_send)}"
-                                    )
-
-                                    # Resets state after successful send attempt.
-                                    self.last_notification_time = current_time
-                                    self.detection_occurred = False
-                                    self.detection_counter = 0
-                                    self.detection_classes_agg = set()
-
-                                except Exception as e:
-                                    logger.error(
-                                        f"Failed to send Telegram notification: {e}"
-                                    )
-                            else:
-                                logger.warning(
-                                    "No suitable image found to send with Telegram alert. Sending text only."
-                                )
-                                try:
-                                    send_telegram_message(text=alert_text)
-                                    logger.info(
-                                        f"(Simulated) Telegram notification sent (text only): {alert_text}"
-                                    )
-                                    # Resets state after successful send attempt.
-                                    self.last_notification_time = current_time
-                                    self.detection_occurred = False
-                                    self.detection_counter = 0
-                                    self.detection_classes_agg = set()
-                                except Exception as e:
-                                    logger.error(
-                                        f"Failed to send Telegram text-only notification: {e}"
-                                    )
 
             detection_time = time.time() - start_time
             target_duration = 1.0 / self.config["MAX_FPS_DETECTION"]
@@ -780,6 +468,318 @@ class DetectionManager:
             time.sleep(sleep_time)
 
         logger.info("Detection loop stopped.")
+
+    def _enqueue_processing_job(self, job):
+        """Enqueues a processing job, dropping the oldest if the queue is full."""
+        try:
+            self.processing_queue.put_nowait(job)
+        except queue.Full:
+            try:
+                self.processing_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self.processing_queue.put_nowait(job)
+            except queue.Full:
+                logger.warning("Processing queue full; dropped latest job.")
+
+    def _processing_loop(self):
+        """Handles I/O heavy work off the detection loop."""
+        logger.info("Processing loop (worker) started.")
+        while not self.stop_event.is_set():
+            try:
+                job = self.processing_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            capture_time_precise = job.get("capture_time_precise")
+            original_frame = job.get("original_frame")
+            detection_info_list = job.get("detection_info_list", [])
+
+            if original_frame is None or not detection_info_list:
+                continue
+
+            timestamp_str = capture_time_precise.strftime("%Y%m%d_%H%M%S")
+            day_folder = os.path.join(self.output_dir, timestamp_str[:8])
+            os.makedirs(day_folder, exist_ok=True)
+            csv_path = os.path.join(day_folder, "images.csv")
+
+            best_det = max(detection_info_list, key=lambda d: d["confidence"])
+            best_class = best_det["class_name"]
+            best_class_sanitized = re.sub(r"[^A-Za-z0-9_-]+", "_", best_class)
+            best_class_conf = best_det["confidence"]
+
+            original_name = f"{timestamp_str}_{best_class_sanitized}_original.jpg"
+            optimized_name = f"{timestamp_str}_{best_class_sanitized}_optimized.jpg"
+            zoomed_name = f"{timestamp_str}_{best_class_sanitized}_zoomed.jpg"
+
+            original_path = os.path.join(day_folder, original_name)
+            optimized_path = os.path.join(day_folder, optimized_name)
+            zoomed_path = os.path.join(day_folder, zoomed_name)
+
+            image_id = int(timestamp_str.replace("_", ""))
+            image_info = {
+                "id": image_id,
+                "file_name": original_name,
+                "width": original_frame.shape[1],
+                "height": original_frame.shape[0],
+            }
+            annotations = []
+            for i, det in enumerate(detection_info_list, start=1):
+                x1, y1, x2, y2 = det["x1"], det["y1"], det["x2"], det["y2"]
+                bbox = [x1, y1, x2 - x1, y2 - y1]
+                area = (x2 - x1) * (y2 - y1)
+                category_id = (
+                    7
+                    if det["class_name"].replace(" ", "_") == best_class_sanitized
+                    else 1
+                )
+                annotations.append(
+                    {
+                        "id": image_id * 100 + i,
+                        "image_id": image_id,
+                        "category_id": category_id,
+                        "bbox": bbox,
+                        "area": area,
+                        "iscrowd": 0,
+                    }
+                )
+            categories = []
+            unique_categories = {}
+            for det in detection_info_list:
+                cat_name = det["class_name"].replace(" ", "_")
+                if cat_name not in unique_categories:
+                    cat_id = 7 if cat_name == best_class_sanitized else 1
+                    unique_categories[cat_name] = cat_id
+                    categories.append({"id": cat_id, "name": cat_name})
+            coco_detection = {
+                "annotations": annotations,
+                "images": [image_info],
+                "categories": categories,
+            }
+            coco_json = json.dumps(coco_detection)
+
+            save_success_original = False
+            save_success_optimized = False
+            actual_zoomed_path = None
+
+            try:
+                save_success_original = cv2.imwrite(original_path, original_frame)
+                if save_success_original:
+                    add_exif_metadata(
+                        original_path, capture_time_precise, self.location_config
+                    )
+                else:
+                    logger.error(
+                        f"Failed to save original image (imwrite returned false): {original_path}"
+                    )
+            except Exception as e:
+                logger.error(f"Error during original image saving/EXIF: {e}")
+                save_success_original = False
+
+            try:
+                if original_frame.shape[1] > 800:
+                    optimized_frame = cv2.resize(
+                        original_frame,
+                        (
+                            800,
+                            int(original_frame.shape[0] * 800 / original_frame.shape[1]),
+                        ),
+                    )
+                    save_success_optimized = cv2.imwrite(
+                        optimized_path,
+                        optimized_frame,
+                        [int(cv2.IMWRITE_JPEG_QUALITY), 70],
+                    )
+                else:
+                    save_success_optimized = cv2.imwrite(
+                        optimized_path,
+                        original_frame,
+                        [int(cv2.IMWRITE_JPEG_QUALITY), 70],
+                    )
+
+                if save_success_optimized:
+                    add_exif_metadata(
+                        optimized_path, capture_time_precise, self.location_config
+                    )
+                else:
+                    logger.error(f"Failed to save optimized image: {optimized_path}")
+            except cv2.error as e:
+                logger.error(f"OpenCV error during optimized image processing/saving: {e}")
+            except Exception as e:
+                logger.error(
+                    f"Unexpected error during optimized image processing/saving: {e}"
+                )
+
+            top1_class_name = ""
+            top1_confidence = ""
+            if detection_info_list:
+                try:
+                    bbox = (
+                        best_det["x1"],
+                        best_det["y1"],
+                        best_det["x2"],
+                        best_det["y2"],
+                    )
+                    zoomed_frame_raw = self.create_square_crop(
+                        original_frame, bbox, margin_percent=0.1
+                    )
+
+                    if zoomed_frame_raw is not None and zoomed_frame_raw.size > 0:
+                        zoomed_frame = cv2.resize(
+                            zoomed_frame_raw,
+                            (
+                                self.SAVE_RESOLUTION_ZOOMED,
+                                self.SAVE_RESOLUTION_ZOOMED,
+                            ),
+                        )
+
+                        try:
+                            zoomed_frame_rgb = cv2.cvtColor(
+                                zoomed_frame, cv2.COLOR_BGR2RGB
+                            )
+                            _, _, top1_class_name, top1_confidence = (
+                                self.classifier.predict_from_image(zoomed_frame_rgb)
+                            )
+                        except Exception as e:
+                            logger.error(f"Classification failed: {e}")
+                            top1_class_name = "CLASSIFICATION_ERROR"
+                            top1_confidence = 0.0
+
+                        save_success_zoomed = cv2.imwrite(
+                            zoomed_path,
+                            zoomed_frame,
+                            [int(cv2.IMWRITE_JPEG_QUALITY), 70],
+                        )
+                        if save_success_zoomed:
+                            add_exif_metadata(
+                                zoomed_path, capture_time_precise, self.location_config
+                            )
+                            actual_zoomed_path = zoomed_path
+                        else:
+                            logger.error(f"Failed to save zoomed image: {zoomed_path}")
+                            zoomed_name = ""
+                    else:
+                        logger.warning(
+                            "Zoomed frame generation failed or resulted in empty image. Skipping save."
+                        )
+                        zoomed_name = ""
+                except cv2.error as e:
+                    logger.error(
+                        f"OpenCV error during zoomed image processing/saving: {e}"
+                    )
+                    zoomed_name = ""
+                except Exception as e:
+                    logger.error(
+                        f"Unexpected error during zoomed image processing/saving: {e}"
+                    )
+                    zoomed_name = ""
+
+            logger.debug(f"Classification Result: {top1_class_name} - {top1_confidence}")
+
+            try:
+                file_exists = os.path.exists(csv_path) and os.stat(csv_path).st_size > 0
+                with open(csv_path, mode="a", newline="", encoding="utf-8") as f:
+                    writer = csv.writer(f)
+                    if not file_exists:
+                        writer.writerow(
+                            [
+                                "timestamp",
+                                "original_name",
+                                "optimized_name",
+                                "zoomed_name",
+                                "best_class",
+                                "best_class_conf",
+                                "top1_class_name",
+                                "top1_confidence",
+                                "coco_json",
+                            ]
+                        )
+                    writer.writerow(
+                        [
+                            timestamp_str,
+                            original_name,
+                            optimized_name,
+                            zoomed_name,
+                            best_class_sanitized,
+                            best_class_conf,
+                            top1_class_name,
+                            top1_confidence,
+                            coco_json,
+                        ]
+                    )
+            except IOError as e:
+                logger.error(f"Error writing to CSV {csv_path}: {e}")
+
+            # Telegram notification (best-effort).
+            self.detection_occurred = True
+            self.detection_counter += len(detection_info_list)
+            self.detection_classes_agg.update(
+                det["class_name"] for det in detection_info_list
+            )
+
+            current_time = time.time()
+            cooldown = self.config.get("TELEGRAM_COOLDOWN", 60)
+
+            if self.detection_occurred and (
+                current_time - self.last_notification_time >= cooldown
+            ):
+                with self.telegram_lock:
+                    if self.detection_occurred and (
+                        current_time - self.last_notification_time >= cooldown
+                    ):
+                        aggregated_classes = ", ".join(
+                            sorted(self.detection_classes_agg)
+                        )
+                        alert_text = (
+                            f"🔎 Detection Alert!\n"
+                            f"Detected: {aggregated_classes}\n"
+                            f"Total ({len(detection_info_list)} new / {self.detection_counter} since last alert)"
+                        )
+
+                        photo_to_send = None
+                        if actual_zoomed_path and os.path.exists(actual_zoomed_path):
+                            photo_to_send = actual_zoomed_path
+                        elif save_success_optimized and os.path.exists(
+                            optimized_path
+                        ):
+                            photo_to_send = optimized_path
+                        elif save_success_original and os.path.exists(original_path):
+                            photo_to_send = original_path
+
+                        if photo_to_send:
+                            try:
+                                send_telegram_message(
+                                    text=alert_text, photo_path=photo_to_send
+                                )
+                                logger.info(
+                                    f"(Simulated) Telegram notification sent: {alert_text} with {os.path.basename(photo_to_send)}"
+                                )
+                                self.last_notification_time = current_time
+                                self.detection_occurred = False
+                                self.detection_counter = 0
+                                self.detection_classes_agg = set()
+                            except Exception as e:
+                                logger.error(f"Failed to send Telegram notification: {e}")
+                        else:
+                            logger.warning(
+                                "No suitable image found to send with Telegram alert. Sending text only."
+                            )
+                            try:
+                                send_telegram_message(text=alert_text)
+                                logger.info(
+                                    f"(Simulated) Telegram notification sent (text only): {alert_text}"
+                                )
+                                self.last_notification_time = current_time
+                                self.detection_occurred = False
+                                self.detection_counter = 0
+                                self.detection_classes_agg = set()
+                            except Exception as e:
+                                logger.error(
+                                    f"Failed to send Telegram text-only notification: {e}"
+                                )
+
+        logger.info("Processing loop stopped.")
 
     # >>> Get Display Frame Function >>>
     def get_display_frame(self):
@@ -811,6 +811,7 @@ class DetectionManager:
         """
         self.frame_thread.start()
         self.detection_thread.start()
+        self.processing_thread.start()
         logger.info("DetectionManager started.")
 
     # >>> Stop DetectionManager >>>
@@ -829,6 +830,8 @@ class DetectionManager:
             self.frame_thread.join()
         if hasattr(self, "detection_thread") and self.detection_thread.is_alive():
             self.detection_thread.join()
+        if hasattr(self, "processing_thread") and self.processing_thread.is_alive():
+            self.processing_thread.join()
         if self.video_capture:
             self.video_capture.stop()
         logger.info("DetectionManager stopped and video capture released.")
