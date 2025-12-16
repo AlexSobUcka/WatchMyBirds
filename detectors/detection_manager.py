@@ -26,6 +26,7 @@ import csv
 import json
 import hashlib
 import queue
+import functools
 
 """
 This module defines the DetectionManager class, which orchestrates video frame acquisition,
@@ -207,6 +208,14 @@ class DetectionManager:
         # For clean shutdown.
         self.stop_event = threading.Event()
 
+        # Daylight cache
+        self._daytime_cache = {
+            "city": None,
+            "value": True,
+            "ts": 0.0,
+        }
+        self._daytime_ttl = 300  # seconds
+
         # Two threads: one for frame acquisition and one for detection.
         self.frame_thread = threading.Thread(
             target=self._frame_update_loop, daemon=True
@@ -220,16 +229,16 @@ class DetectionManager:
 
     # >>> Daytime Check Function >>>
     def _is_daytime(self, city_name):
-        """
-        Determines if it is daytime in the given city.
-
-        Args:
-            city_name (str): Name of the city.
-
-        Returns:
-            bool: True if daytime, False otherwise.
-        """
+        """Determines daylight using Astral with a cached result (sun-position basis)."""
         try:
+            now_ts = time.time()
+            cache = self._daytime_cache
+            if (
+                cache["city"] == city_name
+                and (now_ts - cache["ts"]) < self._daytime_ttl
+            ):
+                return cache["value"]
+
             city = lookup(city_name, database())
             tz = pytz.timezone(city.timezone)
             now = datetime.now(tz)
@@ -237,10 +246,12 @@ class DetectionManager:
             s = sun(
                 city.observer, date=now, tzinfo=tz, dawn_dusk_depression=dawn_depression
             )
-            return s["dawn"] < now < s["dusk"]
+            value = s["dawn"] < now < s["dusk"]
+            cache.update({"city": city_name, "value": value, "ts": now_ts})
+            return value
         except Exception as e:
             logger.error(f"Error determining daylight status: {e}")
-            return True  # Defaults to daytime
+            return True  # Defaults to daytime (per existing behavior)
 
     # >>> Initialize Components >>>
     def _initialize_components(self):
