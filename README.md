@@ -77,6 +77,8 @@ docker-compose up -d
   - PID-tracked start/stop with parent-death signal + shutdown hooks to prevent orphaned FFmpeg processes after crashes or restarts
 - **Stream Settings Cache**
   - First successful stream probe is persisted (`output/stream_settings.json` with validation: URL, stream type, FFmpeg version); cache writes are atomic and reused at restart to skip probing
+- **Fast Web UI Startup**
+  - Web UI starts immediately; stream status loads asynchronously with placeholders/fallbacks when the camera is not yet ready
 
 
 ---

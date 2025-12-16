@@ -825,8 +825,10 @@ class DetectionManager:
             None
         """
         self.stop_event.set()
-        self.frame_thread.join()
-        self.detection_thread.join()
+        if hasattr(self, "frame_thread") and self.frame_thread.is_alive():
+            self.frame_thread.join()
+        if hasattr(self, "detection_thread") and self.detection_thread.is_alive():
+            self.detection_thread.join()
         if self.video_capture:
             self.video_capture.stop()
         logger.info("DetectionManager stopped and video capture released.")

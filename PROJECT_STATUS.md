@@ -15,6 +15,7 @@
 ---
 
 ## Recent Changes
+- 2025-12-12: Web UI startup decoupled from stream init; UI now available immediately with async stream status and placeholders.
 - 2025-12-12: Stream settings cache now validated (URL/type/FFmpeg), atomically written, and updated on runtime resolution changes.
 - 2025-12-12: Added stream settings cache to skip FFmpeg probing on restart and speed up startup.
 - 2025-12-12: Hardened FFmpeg lifecycle to prevent orphaned processes and ensure clean restarts.

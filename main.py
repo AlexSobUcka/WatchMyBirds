@@ -34,16 +34,13 @@ os.makedirs(output_dir, exist_ok=True)
 # Start the Detection Manager
 # -----------------------------
 from detectors.detection_manager import DetectionManager
+import threading
 
 # Create a DetectionManager instance.
 detection_manager = DetectionManager()
 
-# Start the detection loop on a background thread.
-detection_manager.start()
-
-# Wait until video_capture is initialized
-while detection_manager.video_capture is None:
-    time.sleep(0.5)
+# Start detection asynchronously so the web UI can come up immediately.
+threading.Thread(target=detection_manager.start, daemon=True).start()
 
 # Register the cleanup function
 import atexit

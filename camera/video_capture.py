@@ -81,6 +81,7 @@ class VideoCapture:
 
     def start(self):
         """Starts the video stream and background threads."""
+        self.stop_flag = False
         if self.is_running():
             logger.info("VideoCapture already running.")
             return
@@ -89,9 +90,13 @@ class VideoCapture:
                 self._get_stream_resolution_ffprobe()
                 logger.info(f"Initial resolution: {self.resolution}")
             else:
-                logger.info(
-                    f"Loaded cached stream settings: resolution={self.resolution}"
-                )
+                if self._validate_cached_stream_settings():
+                    logger.info(
+                        f"Loaded cached stream settings: resolution={self.resolution}"
+                    )
+                else:
+                    logger.info("Cached settings could not be validated. Re-probing.")
+                    self._get_stream_resolution_ffprobe()
         try:
             self._setup_capture()
         except Exception as start_error:
@@ -402,6 +407,32 @@ class VideoCapture:
             return True
         except Exception as metadata_error:
             logger.debug(f"Cache metadata validation failed: {metadata_error}")
+            return False
+
+    def _validate_cached_stream_settings(self):
+        """
+        Re-probes resolution to ensure cached settings are still correct.
+        Returns True if validation succeeded (even if resolution unchanged),
+        False if validation failed.
+        """
+        try:
+            prev_width, prev_height = self.stream_width, self.stream_height
+            self._get_stream_resolution_ffprobe()
+            if (
+                self.stream_width != prev_width
+                or self.stream_height != prev_height
+            ):
+                logger.info(
+                    f"Stream settings cache updated after resolution change: "
+                    f"{prev_width}x{prev_height} -> {self.stream_width}x{self.stream_height}"
+                )
+            else:
+                logger.info("Stream settings cache validated; resolution unchanged.")
+            return True
+        except Exception as validation_error:
+            logger.warning(
+                f"Cached stream settings validation failed: {validation_error}"
+            )
             return False
 
     def _persist_stream_settings(self):
@@ -969,6 +1000,7 @@ class VideoCapture:
             time.sleep(2)
 
             self.stop_event.clear()  # Reset stop_event for new threads
+            self.stop_flag = False
             self._setup_capture()
             self._start_reader_thread()
             self._start_health_check_thread()

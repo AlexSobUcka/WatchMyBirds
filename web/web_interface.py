@@ -1594,9 +1594,9 @@ def create_web_interface(detection_manager):
             # Retrieve the most recent display frame (raw or optimized)
             frame = detection_manager.get_display_frame()
             if frame is not None:
-                # Assume we want to resize using the original resolution from video capture.
-                w, h = detection_manager.video_capture.resolution
-                output_resize_height = int(h * output_resize_width / w)
+                # Derive size from the current frame to avoid blocking on VideoCapture availability.
+                h, w = frame.shape[:2]
+                output_resize_height = int(h * output_resize_width / w) if w else h
                 resized_frame = cv2.resize(
                     frame, (output_resize_width, output_resize_height)
                 )
@@ -1749,11 +1749,32 @@ def create_web_interface(detection_manager):
             return send_from_directory(output_dir, filename)
 
         app_server.route("/images/<path:filename>")(serve_image)
-        app_server.route("/video_feed")(
-            lambda: Response(
+        def video_feed_route():
+            return Response(
                 generate_video_feed(),
                 mimetype="multipart/x-mixed-replace; boundary=frame",
             )
+
+        def stream_status_route():
+            return (
+                json.dumps(
+                    {
+                        "video_capture_initialized": detection_manager.video_capture
+                        is not None,
+                        "last_frame_timestamp": detection_manager.latest_raw_timestamp
+                        if hasattr(detection_manager, "latest_raw_timestamp")
+                        else None,
+                    }
+                ),
+                200,
+                {"Content-Type": "application/json"},
+            )
+
+        app_server.add_url_rule(
+            "/video_feed", endpoint="video_feed", view_func=video_feed_route
+        )
+        app_server.add_url_rule(
+            "/stream_status", endpoint="stream_status", view_func=stream_status_route
         )
 
     setup_web_routes(server)
