@@ -10,7 +10,7 @@ import onnxruntime as ort
 from PIL import Image
 import torchvision.transforms as transforms
 
-from config import load_config
+from config import get_config
 from logging_config import get_logger
 from utils.model_downloader import ensure_model_files
 
@@ -24,7 +24,7 @@ HF_BASE_URL = (
 class ImageClassifier:
     def __init__(self) -> None:
         """Initializes the image classifier and loads the model."""
-        self.config = load_config()
+        self.config = get_config()
         model_dir = os.path.join(self.config["MODEL_BASE_PATH"], "classifier")
         self.model_path, self.class_path = ensure_model_files(
             HF_BASE_URL, model_dir, "weights_path", "classes_path"

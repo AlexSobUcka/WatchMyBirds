@@ -1,8 +1,8 @@
 # logging_config.py
 import logging
-from config import load_config
+from config import get_config
 
-config = load_config()
+config = get_config()
 DEBUG_MODE = config["DEBUG_MODE"]
 
 # Configure logging once for the entire application.

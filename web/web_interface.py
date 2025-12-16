@@ -29,9 +29,9 @@ from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 from datetime import datetime
 import plotly.express as px
-from config import load_config
+from config import get_config
 
-config = load_config()
+config = get_config()
 
 import zipfile
 import io  # Create in-memory zip buffer
@@ -2244,7 +2244,6 @@ def create_web_interface(detection_manager):
         Input("url", "pathname"),
         Input("url", "search"),
         State("auth-status-store", "data"),  # <-- ADD Auth Status State
-        prevent_initial_call=True,
     )
     def display_page(pathname, search, auth_data):
         scroll_trigger = no_update

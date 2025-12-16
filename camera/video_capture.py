@@ -3,9 +3,9 @@
 # camera/video_capture.py
 # ------------------------------------------------------------------------------
 # video_capture.py
-from config import load_config
+from config import get_config
 
-config = load_config()
+config = get_config()
 
 import subprocess
 import cv2
@@ -40,7 +40,7 @@ class VideoCapture:
     _shutdown_hooks_registered = False
     _ffmpeg_version_cache = None
 
-    def __init__(self, source, debug=False, auto_start=True):
+    def __init__(self, source, debug=False, auto_start=False):
         """
         Initializes the VideoCapture object and detects the stream type.
         """
@@ -90,13 +90,9 @@ class VideoCapture:
                 self._get_stream_resolution_ffprobe()
                 logger.info(f"Initial resolution: {self.resolution}")
             else:
-                if self._validate_cached_stream_settings():
-                    logger.info(
-                        f"Loaded cached stream settings: resolution={self.resolution}"
-                    )
-                else:
-                    logger.info("Cached settings could not be validated. Re-probing.")
-                    self._get_stream_resolution_ffprobe()
+                logger.info(
+                    f"Using cached stream settings without re-probe: resolution={self.resolution}"
+                )
         try:
             self._setup_capture()
         except Exception as start_error:
@@ -738,7 +734,7 @@ class VideoCapture:
                     read_counter += 1
 
                     # Slow down reading to match configured STREAM_FPS
-                    if hasattr(config, "STREAM_FPS") and config["STREAM_FPS"] > 0:
+                    if "STREAM_FPS" in config and config["STREAM_FPS"] > 0:
                         time.sleep(1.0 / config["STREAM_FPS"])
 
                     # Periodically log diagnostic information
@@ -1015,10 +1011,8 @@ class VideoCapture:
 
     def get_frame(self):
         try:
-            frame = self.q.get(timeout=0.3)
-            return frame
+            return self.q.get_nowait()
         except queue.Empty:
-            logger.info("Queue is empty, unable to retrieve frame.")
             return None
 
     def stop(self):

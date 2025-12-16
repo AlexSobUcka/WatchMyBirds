@@ -4,9 +4,9 @@
 # ------------------------------------------------------------------------------
 
 import time
-from config import load_config
+from config import get_config
 
-config = load_config()
+config = get_config()
 import re
 import threading
 from datetime import datetime, timezone
@@ -240,36 +240,34 @@ class DetectionManager:
     # >>> Initialize Components >>>
     def _initialize_components(self):
         """
-        Initializes video capture and detector components with retries.
-
-        Args:
-            None
-
-        Returns:
-            None
+        Initializes video capture and detector components without blocking startup.
+        Safe to call repeatedly; returns True when both components are ready.
         """
-        while self.video_capture is None and not self.stop_event.is_set():
+        if self.stop_event.is_set():
+            return False
+
+        if self.video_capture is None:
             try:
-                self.video_capture = VideoCapture(self.video_source, debug=self.debug)
+                self.video_capture = VideoCapture(
+                    self.video_source, debug=self.debug, auto_start=False
+                )
                 self.video_capture.start()
                 logger.info("VideoCapture initialized in DetectionManager.")
             except Exception as e:
-                logger.error(
-                    f"Failed to initialize video capture: {e}. Retrying in 5 seconds."
-                )
-                time.sleep(5)
+                logger.error(f"Failed to initialize video capture: {e}")
+                self.video_capture = None
 
-        while self.detector_instance is None and not self.stop_event.is_set():
+        if self.detector_instance is None:
             try:
                 self.detector_instance = Detector(
                     model_choice=self.model_choice, debug=self.debug
                 )
                 logger.info("Detector initialized in DetectionManager.")
             except Exception as e:
-                logger.error(
-                    f"Failed to initialize detector: {e}. Retrying in 5 seconds."
-                )
-                time.sleep(5)
+                logger.error(f"Failed to initialize detector: {e}")
+                self.detector_instance = None
+
+        return self.video_capture is not None and self.detector_instance is not None
 
     # >>> Frame Update Loop >>>
     def _frame_update_loop(self):
@@ -366,9 +364,12 @@ class DetectionManager:
         Returns:
             None
         """
-        self._initialize_components()
         logger.info("Detection loop (worker) started.")
         while not self.stop_event.is_set():
+            if not self._initialize_components():
+                logger.debug("Components not ready yet; retrying shortly.")
+                time.sleep(1)
+                continue
             raw_frame = None
             capture_time_precise = datetime.now()
             # Grabs the most recent frame.
@@ -808,7 +809,6 @@ class DetectionManager:
         Returns:
             None
         """
-        self._initialize_components()
         self.frame_thread.start()
         self.detection_thread.start()
         logger.info("DetectionManager started.")

@@ -2,7 +2,7 @@
 # Detector Module for Object Detection (Modularized, ONNX Runtime)
 # detectors/detector.py
 # ------------------------------------------------------------------------------
-from config import load_config
+from config import get_config
 from logging_config import get_logger
 from utils.model_downloader import ensure_model_files
 import os
@@ -12,7 +12,7 @@ import onnxruntime
 import json
 from PIL import Image, ImageDraw, ImageFont
 
-config = load_config()
+config = get_config()
 logger = get_logger(__name__)
 
 HF_BASE_URL = "https://huggingface.co/arminfabritzek/WatchMyBirds-Models/resolve/main/object_detection"

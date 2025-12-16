@@ -3,8 +3,8 @@
 # main.py
 # ------------------------------------------------------------------------------
 import time
-from config import load_config
-config = load_config()
+from config import get_config
+config = get_config()
 from logging_config import get_logger
 logger = get_logger(__name__)
 import json
