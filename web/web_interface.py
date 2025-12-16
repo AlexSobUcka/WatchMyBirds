@@ -1634,9 +1634,10 @@ def create_web_interface(detection_manager):
                     b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
                 )
             elapsed = time.time() - start_time
-            desired_frame_time = 1.0 / STREAM_FPS
-            if elapsed < desired_frame_time:
-                time.sleep(desired_frame_time - elapsed)
+            if STREAM_FPS and STREAM_FPS > 0:
+                desired_frame_time = 1.0 / STREAM_FPS
+                if elapsed < desired_frame_time:
+                    time.sleep(desired_frame_time - elapsed)
 
     def generate_hourly_detection_plot():
         """

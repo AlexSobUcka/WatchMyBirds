@@ -83,6 +83,14 @@ docker-compose up -d
 
 ---
 
+## ⚙️ Configuration Highlights
+- `VIDEO_SOURCE` is read at startup (no runtime change in this phase); UI still starts even if the stream is unavailable.
+- `STREAM_FPS_CAPTURE` (default `0`) throttles frame capture; `0` disables throttling for freshest frames.
+- `STREAM_FPS` (default `0`) throttles the UI MJPEG feed only; set a positive value to reduce UI bandwidth/CPU.
+- Configuration is loaded once via `get_config()` and shared across modules to avoid divergent settings.
+
+---
+
 ## 📡 Tested Cameras
 | Camera Model                                   | Connection          | Status  | Notes                                                           |
 |------------------------------------------------|---------------------|---------|-----------------------------------------------------------------|

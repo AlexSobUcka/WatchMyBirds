@@ -734,8 +734,8 @@ class VideoCapture:
                     read_counter += 1
 
                     # Slow down reading to match configured STREAM_FPS
-                    if "STREAM_FPS" in config and config["STREAM_FPS"] > 0:
-                        time.sleep(1.0 / config["STREAM_FPS"])
+                    if "STREAM_FPS_CAPTURE" in config and config["STREAM_FPS_CAPTURE"] > 0:
+                        time.sleep(1.0 / config["STREAM_FPS_CAPTURE"])
 
                     # Periodically log diagnostic information
                     if time.time() - last_log_time >= 15:
@@ -1010,10 +1010,17 @@ class VideoCapture:
             self.reinit_lock.release()
 
     def get_frame(self):
+        """
+        Returns the most recent frame, dropping any older frames in the queue.
+        Ensures consumers always see the latest frame and do not build backlog.
+        """
+        latest = None
         try:
-            return self.q.get_nowait()
+            while True:
+                latest = self.q.get_nowait()
         except queue.Empty:
-            return None
+            pass
+        return latest
 
     def stop(self):
         """Stops the video stream and releases resources."""

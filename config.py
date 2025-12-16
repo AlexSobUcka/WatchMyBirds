@@ -40,7 +40,8 @@ def _load_config():
         # Results Settings
         "FUSION_ALPHA": float(os.getenv("FUSION_ALPHA", 0.5)),
         # Streaming Settings
-        "STREAM_FPS": float(os.getenv("STREAM_FPS", 1)),
+        "STREAM_FPS": float(os.getenv("STREAM_FPS", 0)),  # UI throttling
+        "STREAM_FPS_CAPTURE": float(os.getenv("STREAM_FPS_CAPTURE", 0)),  # reader throttling
         "STREAM_WIDTH_OUTPUT_RESIZE": int(os.getenv("STREAM_WIDTH_OUTPUT_RESIZE", 640)),
         # Day and Night Capture Settings
         "DAY_AND_NIGHT_CAPTURE": os.getenv("DAY_AND_NIGHT_CAPTURE", "True").lower()
@@ -76,12 +77,19 @@ def _coerce_config_types(config):
     except Exception:
         config["VIDEO_SOURCE"] = source
 
-    # STREAM_FPS should be positive float; fallback to 1.0
+    # STREAM_FPS / STREAM_FPS_CAPTURE: allow 0 to disable throttling; otherwise positive float
     try:
         stream_fps = float(config.get("STREAM_FPS", 1))
-        config["STREAM_FPS"] = stream_fps if stream_fps > 0 else 1.0
+        config["STREAM_FPS"] = stream_fps if stream_fps > 0 else 0.0
     except Exception:
-        config["STREAM_FPS"] = 1.0
+        config["STREAM_FPS"] = 0.0
+    try:
+        stream_fps_capture = float(config.get("STREAM_FPS_CAPTURE", 0))
+        config["STREAM_FPS_CAPTURE"] = (
+            stream_fps_capture if stream_fps_capture > 0 else 0.0
+        )
+    except Exception:
+        config["STREAM_FPS_CAPTURE"] = 0.0
 
     # CPU_LIMIT should be positive int; fallback to 1
     try:
