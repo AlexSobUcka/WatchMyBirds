@@ -8,7 +8,6 @@ import math
 from urllib.parse import parse_qs
 import re
 import logging
-import csv
 from flask import Flask, send_from_directory, Response
 from dash import (
     Dash,
@@ -30,8 +29,16 @@ import numpy as np
 from datetime import datetime
 import plotly.express as px
 from config import get_config
+from utils.db import (
+    get_connection,
+    fetch_all_images,
+    fetch_images_by_date,
+    delete_images_by_names,
+    update_downloaded_timestamp,
+)
 
 config = get_config()
+db_conn = get_connection()
 
 import zipfile
 import io  # Create in-memory zip buffer
@@ -86,52 +93,19 @@ def create_web_interface(detection_manager):
         logger.error(f"Failed to load common names from {common_names_file}: {e}")
         COMMON_NAMES = {"Cyanistes_caeruleus": "Eurasian blue tit"}
 
-    # >>> Helper Functions for CSV and File Operations >>>
-    def get_csv_path(date_str_iso):
-        """Gets the expected path to the images.csv file for a given date."""
-        date_folder = date_str_iso.replace("-", "")  # Convert YYYY-MM-DD to YYYYMMDD
-        return os.path.join(output_dir, date_folder, "images.csv")
+    # >>> Helper Functions for DB and File Operations >>>
+    def _rows_to_df(rows):
+        if not rows:
+            return pd.DataFrame()
+        records = [dict(row) for row in rows]
+        df = pd.DataFrame.from_records(records)
+        if "downloaded_timestamp" not in df.columns:
+            df["downloaded_timestamp"] = ""
+        return df.sort_values(by="timestamp", ascending=False)
 
-    def read_csv_for_date(date_str_iso):
-        """Reads the CSV for a specific date into a pandas DataFrame."""
-        csv_path = get_csv_path(date_str_iso)
-        if not os.path.exists(csv_path):
-            return pd.DataFrame()  # Return empty DataFrame if file doesn't exist
-        try:
-            # Specify dtype={'downloaded_timestamp': str} to avoid pandas interpreting it as date/time
-            # Keep other columns as default or specify if needed
-            return pd.read_csv(
-                csv_path, keep_default_na=False, dtype={"downloaded_timestamp": str}
-            ).sort_values(by="timestamp", ascending=False)
-        except Exception as e:
-            logger.error(f"Error reading CSV {csv_path}: {e}")
-            return pd.DataFrame()  # Return empty on error
-
-    def write_csv_for_date(date_str_iso, df):
-        """Writes a pandas DataFrame back to the CSV for a specific date."""
-        csv_path = get_csv_path(date_str_iso)
-        try:
-            # Ensure the directory exists
-            os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-
-            # Work on a copy to avoid SettingWithCopyWarning
-            df = df.copy()
-
-            # Ensure 'downloaded_timestamp' exists before writing; fill with empty string if not
-            if "downloaded_timestamp" not in df.columns:
-                df.loc[:, "downloaded_timestamp"] = ""
-            df.to_csv(
-                csv_path, index=False, quoting=csv.QUOTE_MINIMAL
-            )  # Use minimal quoting
-
-            # Clear the cache as CSV has changed
-            _cached_images["images"] = None
-            _cached_images["timestamp"] = 0
-            logger.info(f"Successfully wrote CSV for {date_str_iso}")
-            return True
-        except Exception as e:
-            logger.error(f"Error writing CSV {csv_path}: {e}")
-            return False
+    def read_csv_for_date(date_str_iso):  # legacy name; now reads from SQLite
+        rows = fetch_images_by_date(db_conn, date_str_iso)
+        return _rows_to_df(rows)
 
     def delete_image_files(relative_optimized_path):
         """Deletes original, optimized, and zoomed versions of an image."""
@@ -152,47 +126,36 @@ def create_web_interface(detection_manager):
 
     def get_all_images():
         """
-        Reads all per-day CSV files (from folders named YYYYMMDD) and returns a list of tuples:
+        Reads all rows from SQLite and returns a list of tuples:
           (timestamp, optimized image relative path, best_class, best_class_conf, top1_class_name, top1_confidence)
         Sorted by timestamp (newest first).
         """
         images = []
-        # List subfolders in output_dir that match a day folder (e.g. "20250318")
-        for item in os.listdir(output_dir):
-            subfolder = os.path.join(output_dir, item)
-            if os.path.isdir(subfolder) and re.match(r"\d{8}", item):
-                csv_file = os.path.join(subfolder, "images.csv")
-                if os.path.exists(csv_file):
-                    try:
-                        with open(csv_file, newline="") as f:
-                            reader = csv.DictReader(f)
-                            for row in reader:
-                                # Extract values by column names.
-                                timestamp = row.get("timestamp", "").strip()
-                                optimized_name = row.get("optimized_name", "").strip()
-                                best_class = row.get("best_class", "").strip()
-                                best_class_conf = row.get("best_class_conf", "").strip()
-                                top1_class = row.get("top1_class_name", "").strip()
-                                top1_conf = row.get("top1_confidence", "").strip()
-                                if not timestamp or not optimized_name:
-                                    continue
-                                # Construct relative path: folder/optimized_name
-                                rel_path = os.path.join(item, optimized_name)
-                                images.append(
-                                    (
-                                        timestamp,
-                                        rel_path,
-                                        best_class,
-                                        best_class_conf,
-                                        top1_class,
-                                        top1_conf,
-                                    )
-                                )
-                    except Exception as file_err:
-                        logger.error(f"Error reading CSV file {csv_file}: {file_err}")
-                        continue
-        # Sort images by timestamp descending (YYYYMMDD_HHMMSS lexical order)
-        images.sort(key=lambda x: x[0], reverse=True)
+        try:
+            rows = fetch_all_images(db_conn)
+            for row in rows:
+                timestamp = row["timestamp"]
+                optimized_name = row["optimized_name"]
+                best_class = row["best_class"]
+                best_class_conf = row["best_class_conf"]
+                top1_class = row["top1_class_name"]
+                top1_conf = row["top1_confidence"]
+                if not timestamp or not optimized_name:
+                    continue
+                date_folder = timestamp[:8]
+                rel_path = os.path.join(date_folder, optimized_name)
+                images.append(
+                    (
+                        timestamp,
+                        rel_path,
+                        best_class,
+                        best_class_conf,
+                        top1_class,
+                        top1_conf,
+                    )
+                )
+        except Exception as e:
+            logger.error(f"Error reading images from SQLite: {e}")
         return images
 
     def get_captured_images():
@@ -2440,20 +2403,21 @@ def create_web_interface(detection_manager):
         if df.empty:
             return (
                 dbc.Alert(
-                    f"Error: Could not read CSV data for {date_str_iso} to perform deletion.",
+                    f"Error: Could not read data for {date_str_iso} to perform deletion.",
                     color="danger",
                 ),
                 no_update,
             )
 
-        # Identify rows to keep
-        # We stored relative paths (folder/file) in selected_images
-        # Need to match based on the filename part
         selected_filenames = {os.path.basename(p) for p in selected_images}
-        df_to_keep = df[~df["optimized_name"].isin(selected_filenames)]
-
-        # Write the filtered DataFrame back
-        success_csv = write_csv_for_date(date_str_iso, df_to_keep)
+        try:
+            delete_images_by_names(db_conn, selected_filenames)
+            success_delete = True
+            _cached_images["images"] = None
+            _cached_images["timestamp"] = 0
+        except Exception as e:
+            logger.error(f"Error deleting rows from SQLite: {e}")
+            success_delete = False
 
         deleted_files_count = 0
         error_messages = []
@@ -2467,11 +2431,10 @@ def create_web_interface(detection_manager):
 
         # --- Feedback Message ---
         status_messages = []
-        if success_csv:
-            status_messages.append(f"Successfully updated CSV for {date_str_iso}.")
-            status_messages.append(f"{len(selected_images)} entries removed.")
+        if success_delete:
+            status_messages.append(f"Successfully removed {len(selected_images)} entries from database.")
         else:
-            status_messages.append(f"Error updating CSV for {date_str_iso}.")
+            status_messages.append(f"Error updating database for {date_str_iso}.")
 
         if deleted_files_count > 0 or not error_messages:
             status_messages.append(
@@ -2482,8 +2445,8 @@ def create_web_interface(detection_manager):
 
         alert_color = (
             "success"
-            if success_csv and not error_messages
-            else ("warning" if success_csv else "danger")
+            if success_delete and not error_messages
+            else ("warning" if success_delete else "danger")
         )
 
         return dbc.Alert(
@@ -2530,25 +2493,25 @@ def create_web_interface(detection_manager):
         df = read_csv_for_date(date_str_iso)
         if df.empty:
             return no_update, dbc.Alert(
-                f"Error: Could not read CSV data for {date_str_iso} to perform download.",
+                f"Error: Could not read data for {date_str_iso} to perform download.",
                 color="danger",
                 dismissable=True,
             )
 
-        # --- 1. Update CSV ---
+        # --- 1. Update DB ---
         download_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         selected_filenames = {os.path.basename(p) for p in selected_images}
 
-        # Ensure the column exists
-        if "downloaded_timestamp" not in df.columns:
-            df["downloaded_timestamp"] = ""
-            df["downloaded_timestamp"] = df["downloaded_timestamp"].astype(str)
-
-        # Update rows - use .loc for safer assignment
-        rows_to_update = df["optimized_name"].isin(selected_filenames)
-        df.loc[rows_to_update, "downloaded_timestamp"] = download_timestamp
-
-        success_csv = write_csv_for_date(date_str_iso, df)
+        try:
+            update_downloaded_timestamp(
+                db_conn, selected_filenames, download_timestamp
+            )
+            success_db = True
+            _cached_images["images"] = None
+            _cached_images["timestamp"] = 0
+        except Exception as e:
+            logger.error(f"Error updating downloaded_timestamp in SQLite: {e}")
+            success_db = False
 
         # --- 2. Create Zip ---
         zip_buffer = io.BytesIO()
@@ -2598,12 +2561,12 @@ def create_web_interface(detection_manager):
 
         # --- 4. Prepare Status Message ---
         status_messages = []
-        if success_csv:
+        if success_db:
             status_messages.append(
-                f"Marked {len(selected_images)} images as downloaded in CSV for {date_str_iso}."
+                f"Marked {len(selected_images)} images as downloaded for {date_str_iso}."
             )
         else:
-            status_messages.append(f"Error updating CSV for {date_str_iso}.")
+            status_messages.append(f"Error updating database for {date_str_iso}.")
 
         if files_added > 0:
             status_messages.append(
@@ -2616,7 +2579,7 @@ def create_web_interface(detection_manager):
 
         alert_color = (
             "success"
-            if success_csv and files_added > 0 and not errors_zipping
+            if success_db and files_added > 0 and not errors_zipping
             else "warning"
         )
 

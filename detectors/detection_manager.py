@@ -22,11 +22,10 @@ from camera.video_capture import VideoCapture
 from utils.telegram_notifier import send_telegram_message
 from logging_config import get_logger
 import os
-import csv
 import json
 import hashlib
 import queue
-import functools
+from utils.db import get_connection, insert_image
 
 """
 This module defines the DetectionManager class, which orchestrates video frame acquisition,
@@ -200,6 +199,7 @@ class DetectionManager:
         self.video_capture = None
         self.detector_instance = None
         self.processing_queue = queue.Queue(maxsize=1)
+        self.db_conn = get_connection()
 
         # Set up output directory
         self.output_dir = self.config["OUTPUT_DIR"]
@@ -689,38 +689,23 @@ class DetectionManager:
             logger.debug(f"Classification Result: {top1_class_name} - {top1_confidence}")
 
             try:
-                file_exists = os.path.exists(csv_path) and os.stat(csv_path).st_size > 0
-                with open(csv_path, mode="a", newline="", encoding="utf-8") as f:
-                    writer = csv.writer(f)
-                    if not file_exists:
-                        writer.writerow(
-                            [
-                                "timestamp",
-                                "original_name",
-                                "optimized_name",
-                                "zoomed_name",
-                                "best_class",
-                                "best_class_conf",
-                                "top1_class_name",
-                                "top1_confidence",
-                                "coco_json",
-                            ]
-                        )
-                    writer.writerow(
-                        [
-                            timestamp_str,
-                            original_name,
-                            optimized_name,
-                            zoomed_name,
-                            best_class_sanitized,
-                            best_class_conf,
-                            top1_class_name,
-                            top1_confidence,
-                            coco_json,
-                        ]
-                    )
-            except IOError as e:
-                logger.error(f"Error writing to CSV {csv_path}: {e}")
+                insert_image(
+                    self.db_conn,
+                    {
+                        "timestamp": timestamp_str,
+                        "original_name": original_name,
+                        "optimized_name": optimized_name,
+                        "zoomed_name": zoomed_name,
+                        "best_class": best_class_sanitized,
+                        "best_class_conf": best_class_conf,
+                        "top1_class_name": top1_class_name,
+                        "top1_confidence": top1_confidence,
+                        "coco_json": coco_json,
+                        "downloaded_timestamp": "",
+                    },
+                )
+            except Exception as e:
+                logger.error(f"Error writing detection to SQLite: {e}")
 
             # Telegram notification (best-effort).
             self.detection_occurred = True
@@ -845,4 +830,9 @@ class DetectionManager:
             self.processing_thread.join()
         if self.video_capture:
             self.video_capture.stop()
+        try:
+            if self.db_conn:
+                self.db_conn.close()
+        except Exception:
+            pass
         logger.info("DetectionManager stopped and video capture released.")
