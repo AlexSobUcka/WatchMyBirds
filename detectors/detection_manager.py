@@ -720,6 +720,12 @@ class DetectionManager:
             if self.detection_occurred and (
                 current_time - self.last_notification_time >= cooldown
             ):
+                if not self.config.get("TELEGRAM_ENABLED", True):
+                    self.last_notification_time = current_time
+                    self.detection_occurred = False
+                    self.detection_counter = 0
+                    self.detection_classes_agg = set()
+                    continue
                 with self.telegram_lock:
                     if self.detection_occurred and (
                         current_time - self.last_notification_time >= cooldown

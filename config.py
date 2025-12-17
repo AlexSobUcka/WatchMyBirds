@@ -2,59 +2,109 @@
 import os
 from dotenv import load_dotenv
 
+from utils.settings import load_settings_yaml, save_settings_yaml
+
 # Load environment variables from .env file once.
 load_dotenv()
 
 
 _CONFIG = None
 
+DEFAULTS = {
+    "DEBUG_MODE": False,
+    "OUTPUT_DIR": "/output",
+    "VIDEO_SOURCE": "0",
+    "LOCATION_DATA": {"latitude": 52.516, "longitude": 13.377},
+    "DETECTOR_MODEL_CHOICE": "yolo",
+    "CONFIDENCE_THRESHOLD_DETECTION": 0.55,
+    "SAVE_THRESHOLD": 0.55,
+    "MAX_FPS_DETECTION": 0.5,
+    "MODEL_BASE_PATH": "/models",
+    "CLASSIFIER_CONFIDENCE_THRESHOLD": 0.55,
+    "FUSION_ALPHA": 0.5,
+    "STREAM_FPS": 0.0,
+    "STREAM_FPS_CAPTURE": 0.0,
+    "STREAM_WIDTH_OUTPUT_RESIZE": 640,
+    "DAY_AND_NIGHT_CAPTURE": True,
+    "DAY_AND_NIGHT_CAPTURE_LOCATION": "Berlin",
+    "CPU_LIMIT": 1,
+    "TELEGRAM_COOLDOWN": 5.0,
+    "EDIT_PASSWORD": "SECRET_PASSWORD",
+    "TELEGRAM_ENABLED": True,
+}
+
+RUNTIME_KEYS = {
+    "CONFIDENCE_THRESHOLD_DETECTION",
+    "SAVE_THRESHOLD",
+    "MAX_FPS_DETECTION",
+    "DAY_AND_NIGHT_CAPTURE",
+    "DAY_AND_NIGHT_CAPTURE_LOCATION",
+    "STREAM_FPS",
+    "STREAM_FPS_CAPTURE",
+    "CLASSIFIER_CONFIDENCE_THRESHOLD",
+    "FUSION_ALPHA",
+    "TELEGRAM_COOLDOWN",
+    "EDIT_PASSWORD",
+    "TELEGRAM_ENABLED",
+}
+
+BOOT_KEYS = set(DEFAULTS.keys()) - RUNTIME_KEYS
+
 
 def _load_config():
-    """Lädt Konfiguration aus Umgebungsvariablen."""
-    location_str = os.getenv("LOCATION_DATA", "52.516, 13.377")
-    try:
-        lat_str, lon_str = location_str.split(",")
-        location_data = {"latitude": float(lat_str), "longitude": float(lon_str)}
-    except Exception:
-        location_data = {"latitude": 52.516, "longitude": 13.377}
+    """Lädt Konfiguration aus Umgebungsvariablen und YAML."""
+    config = dict(DEFAULTS)
 
-    config = {
-        # General Settings
-        "DEBUG_MODE": os.getenv("DEBUG_MODE", "False").lower() == "true",
-        "OUTPUT_DIR": os.getenv("OUTPUT_DIR", "/output"),
-        "VIDEO_SOURCE": os.getenv("VIDEO_SOURCE", "0"),
-        # GPS Location
-        "LOCATION_DATA": location_data,
-        # Model and Detection Settings
-        "DETECTOR_MODEL_CHOICE": os.getenv("DETECTOR_MODEL_CHOICE", "yolo"),
-        "CONFIDENCE_THRESHOLD_DETECTION": float(
-            os.getenv("CONFIDENCE_THRESHOLD_DETECTION", 0.55)
-        ),
-        "SAVE_THRESHOLD": float(os.getenv("SAVE_THRESHOLD", 0.55)),
-        "MAX_FPS_DETECTION": float(os.getenv("MAX_FPS_DETECTION", 0.5)),
-        "MODEL_BASE_PATH": os.getenv("MODEL_BASE_PATH", "/models"),
-        # Model and Classifier Settings
-        "CLASSIFIER_CONFIDENCE_THRESHOLD": float(
-            os.getenv("CLASSIFIER_CONFIDENCE_THRESHOLD", 0.55)
-        ),
-        # Results Settings
-        "FUSION_ALPHA": float(os.getenv("FUSION_ALPHA", 0.5)),
-        # Streaming Settings
-        "STREAM_FPS": float(os.getenv("STREAM_FPS", 0)),  # UI throttling
-        "STREAM_FPS_CAPTURE": float(os.getenv("STREAM_FPS_CAPTURE", 0)),  # reader throttling
-        "STREAM_WIDTH_OUTPUT_RESIZE": int(os.getenv("STREAM_WIDTH_OUTPUT_RESIZE", 640)),
-        # Day and Night Capture Settings
-        "DAY_AND_NIGHT_CAPTURE": os.getenv("DAY_AND_NIGHT_CAPTURE", "True").lower()
-        == "true",
-        "DAY_AND_NIGHT_CAPTURE_LOCATION": os.getenv(
-            "DAY_AND_NIGHT_CAPTURE_LOCATION", "Berlin"
-        ),
-        # CPU and Resource Management
-        "CPU_LIMIT": int(float(os.getenv("CPU_LIMIT", 1))),
-        # Telegram Notification Settings
-        "TELEGRAM_COOLDOWN": float(os.getenv("TELEGRAM_COOLDOWN", 5)),
-        "EDIT_PASSWORD": os.getenv("EDIT_PASSWORD", "SECRET_PASSWORD"),
-    }
+    # Env overrides
+    if os.getenv("DEBUG_MODE") is not None:
+        config["DEBUG_MODE"] = os.getenv("DEBUG_MODE")
+    if os.getenv("OUTPUT_DIR") is not None:
+        config["OUTPUT_DIR"] = os.getenv("OUTPUT_DIR")
+    if os.getenv("VIDEO_SOURCE") is not None:
+        config["VIDEO_SOURCE"] = os.getenv("VIDEO_SOURCE")
+
+    location_str = os.getenv("LOCATION_DATA")
+    if location_str:
+        config["LOCATION_DATA"] = location_str
+
+    for key in (
+        "DETECTOR_MODEL_CHOICE",
+        "MODEL_BASE_PATH",
+        "DAY_AND_NIGHT_CAPTURE_LOCATION",
+        "EDIT_PASSWORD",
+    ):
+        if os.getenv(key) is not None:
+            config[key] = os.getenv(key)
+
+    for key in (
+        "CONFIDENCE_THRESHOLD_DETECTION",
+        "SAVE_THRESHOLD",
+        "MAX_FPS_DETECTION",
+        "CLASSIFIER_CONFIDENCE_THRESHOLD",
+        "FUSION_ALPHA",
+        "STREAM_FPS",
+        "STREAM_FPS_CAPTURE",
+        "TELEGRAM_COOLDOWN",
+    ):
+        if os.getenv(key) is not None:
+            config[key] = os.getenv(key)
+
+    if os.getenv("STREAM_WIDTH_OUTPUT_RESIZE") is not None:
+        config["STREAM_WIDTH_OUTPUT_RESIZE"] = os.getenv(
+            "STREAM_WIDTH_OUTPUT_RESIZE"
+        )
+    if os.getenv("DAY_AND_NIGHT_CAPTURE") is not None:
+        config["DAY_AND_NIGHT_CAPTURE"] = os.getenv("DAY_AND_NIGHT_CAPTURE")
+    if os.getenv("CPU_LIMIT") is not None:
+        config["CPU_LIMIT"] = os.getenv("CPU_LIMIT")
+
+    # YAML runtime overrides
+    yaml_settings = load_settings_yaml(str(config["OUTPUT_DIR"]))
+    for key, value in yaml_settings.items():
+        if key in RUNTIME_KEYS:
+            config[key] = value
+
+    _coerce_config_types(config)
     return config
 
 
@@ -63,12 +113,28 @@ def get_config():
     global _CONFIG
     if _CONFIG is None:
         _CONFIG = _load_config()
-        _coerce_config_types(_CONFIG)
     return _CONFIG
 
 
 def _coerce_config_types(config):
     """Validiert und erzwingt erwartete Typen für zentrale Keys."""
+    # Booleans
+    for key in ("DEBUG_MODE", "DAY_AND_NIGHT_CAPTURE", "TELEGRAM_ENABLED"):
+        if key in config:
+            config[key] = _coerce_bool(config.get(key))
+
+    # LOCATION_DATA: parse "lat, lon" strings into dict
+    location_val = config.get("LOCATION_DATA")
+    if isinstance(location_val, str):
+        try:
+            lat_str, lon_str = location_val.split(",")
+            config["LOCATION_DATA"] = {
+                "latitude": float(lat_str),
+                "longitude": float(lon_str),
+            }
+        except Exception:
+            config["LOCATION_DATA"] = DEFAULTS["LOCATION_DATA"]
+
     # VIDEO_SOURCE: int for webcams, string otherwise (startup-only per locked decision).
     source = config.get("VIDEO_SOURCE", "0")
     try:
@@ -98,13 +164,132 @@ def _coerce_config_types(config):
     except Exception:
         config["CPU_LIMIT"] = 1
 
-    # Thresholds: guard against invalid values
-    for key in ("CONFIDENCE_THRESHOLD_DETECTION", "SAVE_THRESHOLD"):
+    # Numeric values
+    for key in (
+        "CONFIDENCE_THRESHOLD_DETECTION",
+        "SAVE_THRESHOLD",
+        "CLASSIFIER_CONFIDENCE_THRESHOLD",
+        "FUSION_ALPHA",
+    ):
         try:
             val = float(config.get(key, 0.55))
             config[key] = max(0.0, min(1.0, val))
         except Exception:
             config[key] = 0.55
+
+    for key in ("MAX_FPS_DETECTION", "TELEGRAM_COOLDOWN"):
+        try:
+            val = float(config.get(key, DEFAULTS.get(key, 0.0)))
+            config[key] = val
+        except Exception:
+            config[key] = DEFAULTS.get(key, 0.0)
+
+    try:
+        config["STREAM_WIDTH_OUTPUT_RESIZE"] = int(
+            float(config.get("STREAM_WIDTH_OUTPUT_RESIZE", 640))
+        )
+    except Exception:
+        config["STREAM_WIDTH_OUTPUT_RESIZE"] = 640
+
+
+def _coerce_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes", "y", "on")
+    return False
+
+
+def get_settings_payload():
+    """Liefert Settings inkl. Metadaten für UI/API."""
+    cfg = get_config()
+    yaml_settings = load_settings_yaml(str(cfg["OUTPUT_DIR"]))
+    env_overrides = {
+        key
+        for key in DEFAULTS
+        if os.getenv(key) is not None
+    }
+    payload = {}
+    for key, default in DEFAULTS.items():
+        source = "default"
+        if key in yaml_settings:
+            source = "yaml"
+        elif key in env_overrides:
+            source = "env"
+        payload[key] = {
+            "value": cfg.get(key),
+            "default": default,
+            "source": source,
+            "editable": key in RUNTIME_KEYS,
+            "restart_required": key in BOOT_KEYS,
+        }
+    return payload
+
+
+def validate_runtime_updates(updates):
+    """Validiert Laufzeit-Updates und gibt (valid, errors) zurück."""
+    valid = {}
+    errors = {}
+    for key, value in updates.items():
+        if key not in RUNTIME_KEYS:
+            continue
+        ok, coerced = _validate_value(key, value)
+        if ok:
+            valid[key] = coerced
+        else:
+            errors[key] = "Invalid value"
+    return valid, errors
+
+
+def update_runtime_settings(updates):
+    """Speichert Laufzeit-Settings und aktualisiert die laufende Konfiguration."""
+    cfg = get_config()
+    yaml_settings = load_settings_yaml(str(cfg["OUTPUT_DIR"]))
+    for key, value in updates.items():
+        if key not in RUNTIME_KEYS:
+            continue
+        if value == DEFAULTS.get(key):
+            yaml_settings.pop(key, None)
+        else:
+            yaml_settings[key] = value
+        cfg[key] = value
+    save_settings_yaml(yaml_settings, str(cfg["OUTPUT_DIR"]))
+
+
+def _validate_value(key, value):
+    if key in ("DAY_AND_NIGHT_CAPTURE", "TELEGRAM_ENABLED"):
+        return True, _coerce_bool(value)
+    if key in ("CONFIDENCE_THRESHOLD_DETECTION", "SAVE_THRESHOLD", "CLASSIFIER_CONFIDENCE_THRESHOLD", "FUSION_ALPHA"):
+        try:
+            val = float(value)
+        except Exception:
+            return False, None
+        if 0.0 <= val <= 1.0:
+            return True, val
+        return False, None
+    if key in ("STREAM_FPS", "STREAM_FPS_CAPTURE"):
+        try:
+            val = float(value)
+        except Exception:
+            return False, None
+        if val >= 0.0:
+            return True, val
+        return False, None
+    if key in ("MAX_FPS_DETECTION", "TELEGRAM_COOLDOWN"):
+        try:
+            val = float(value)
+        except Exception:
+            return False, None
+        if val > 0.0:
+            return True, val
+        return False, None
+    if key in ("DAY_AND_NIGHT_CAPTURE_LOCATION", "EDIT_PASSWORD"):
+        if isinstance(value, str) and value.strip():
+            return True, value.strip()
+        return False, None
+    return False, None
 
 
 # Backward-compatible alias

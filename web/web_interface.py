@@ -8,7 +8,7 @@ import math
 from urllib.parse import parse_qs
 import re
 import logging
-from flask import Flask, send_from_directory, Response
+from flask import Flask, send_from_directory, Response, request, jsonify
 from dash import (
     Dash,
     html,
@@ -28,7 +28,12 @@ from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 from datetime import datetime
 import plotly.express as px
-from config import get_config
+from config import (
+    get_config,
+    get_settings_payload,
+    validate_runtime_updates,
+    update_runtime_settings,
+)
 from utils.db import (
     get_connection,
     fetch_all_images,
@@ -67,7 +72,6 @@ def create_web_interface(detection_manager):
 
     output_dir = config["OUTPUT_DIR"]
     output_resize_width = config["STREAM_WIDTH_OUTPUT_RESIZE"]
-    STREAM_FPS = config["STREAM_FPS"]
     CONFIDENCE_THRESHOLD_DETECTION = config["CONFIDENCE_THRESHOLD_DETECTION"]
     CLASSIFIER_CONFIDENCE_THRESHOLD = config["CLASSIFIER_CONFIDENCE_THRESHOLD"]
     FUSION_ALPHA = config["FUSION_ALPHA"]
@@ -1219,6 +1223,9 @@ def create_web_interface(detection_manager):
                 dbc.NavItem(
                     dbc.NavLink("Species Summary", href="/species", className="mx-auto")
                 ),
+                dbc.NavItem(
+                    dbc.NavLink("Settings", href="/settings", className="mx-auto")
+                ),
             ],
             color="primary",
             dark=True,
@@ -1597,8 +1604,9 @@ def create_web_interface(detection_manager):
                     b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
                 )
             elapsed = time.time() - start_time
-            if STREAM_FPS and STREAM_FPS > 0:
-                desired_frame_time = 1.0 / STREAM_FPS
+            stream_fps = config.get("STREAM_FPS", 0)
+            if stream_fps and stream_fps > 0:
+                desired_frame_time = 1.0 / stream_fps
                 if elapsed < desired_frame_time:
                     time.sleep(desired_frame_time - elapsed)
 
@@ -1734,11 +1742,30 @@ def create_web_interface(detection_manager):
                 {"Content-Type": "application/json"},
             )
 
+        def settings_get_route():
+            return jsonify(get_settings_payload())
+
+        def settings_post_route():
+            payload = request.get_json(silent=True) or {}
+            if not isinstance(payload, dict):
+                return jsonify({"error": "Invalid payload"}), 400
+            valid, errors = validate_runtime_updates(payload)
+            if errors:
+                return jsonify({"errors": errors}), 400
+            update_runtime_settings(valid)
+            return jsonify(get_settings_payload())
+
         app_server.add_url_rule(
             "/video_feed", endpoint="video_feed", view_func=video_feed_route
         )
         app_server.add_url_rule(
             "/stream_status", endpoint="stream_status", view_func=stream_status_route
+        )
+        app_server.add_url_rule(
+            "/api/settings", endpoint="settings_get", view_func=settings_get_route, methods=["GET"]
+        )
+        app_server.add_url_rule(
+            "/api/settings", endpoint="settings_post", view_func=settings_post_route, methods=["POST"]
         )
 
     setup_web_routes(server)
@@ -1871,6 +1898,164 @@ def create_web_interface(detection_manager):
             ),
         ]
         return dbc.Container(layout_children, fluid=True)
+
+    RUNTIME_BOOL_KEYS = {"DAY_AND_NIGHT_CAPTURE", "TELEGRAM_ENABLED"}
+    RUNTIME_NUMBER_KEYS = {
+        "CONFIDENCE_THRESHOLD_DETECTION",
+        "SAVE_THRESHOLD",
+        "MAX_FPS_DETECTION",
+        "CLASSIFIER_CONFIDENCE_THRESHOLD",
+        "FUSION_ALPHA",
+        "STREAM_FPS",
+        "STREAM_FPS_CAPTURE",
+        "TELEGRAM_COOLDOWN",
+    }
+
+    RUNTIME_KEYS_ORDER = [
+        "CONFIDENCE_THRESHOLD_DETECTION",
+        "SAVE_THRESHOLD",
+        "MAX_FPS_DETECTION",
+        "CLASSIFIER_CONFIDENCE_THRESHOLD",
+        "FUSION_ALPHA",
+        "DAY_AND_NIGHT_CAPTURE",
+        "DAY_AND_NIGHT_CAPTURE_LOCATION",
+        "STREAM_FPS",
+        "STREAM_FPS_CAPTURE",
+        "TELEGRAM_COOLDOWN",
+        "TELEGRAM_ENABLED",
+        "EDIT_PASSWORD",
+    ]
+
+    SYSTEM_KEYS_ORDER = [
+        "OUTPUT_DIR",
+        "MODEL_BASE_PATH",
+        "DEBUG_MODE",
+        "CPU_LIMIT",
+        "VIDEO_SOURCE",
+        "DETECTOR_MODEL_CHOICE",
+        "STREAM_WIDTH_OUTPUT_RESIZE",
+        "LOCATION_DATA",
+    ]
+
+    def _format_value(value):
+        if isinstance(value, dict) and "latitude" in value and "longitude" in value:
+            return f"{value['latitude']}, {value['longitude']}"
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return str(value)
+
+    def settings_layout():
+        """Layout for the Settings page."""
+        payload = get_settings_payload()
+
+        runtime_rows = []
+        for key in RUNTIME_KEYS_ORDER:
+            if key not in payload:
+                continue
+            meta = payload[key]
+            value = meta["value"]
+            default = meta["default"]
+            if key in RUNTIME_BOOL_KEYS:
+                input_component = dbc.Select(
+                    id={"type": "runtime-setting", "key": key},
+                    options=[
+                        {"label": "true", "value": True},
+                        {"label": "false", "value": False},
+                    ],
+                    value=value,
+                )
+            elif key in RUNTIME_NUMBER_KEYS:
+                input_component = dbc.Input(
+                    id={"type": "runtime-setting", "key": key},
+                    type="number",
+                    value=value,
+                )
+            else:
+                input_component = dbc.Input(
+                    id={"type": "runtime-setting", "key": key},
+                    type="text",
+                    value=_format_value(value),
+                )
+            runtime_rows.append(
+                html.Tr(
+                    [
+                        html.Td(key),
+                        html.Td(input_component),
+                        html.Td(_format_value(default)),
+                        html.Td(meta["source"]),
+                        html.Td("yes" if meta["restart_required"] else "no"),
+                    ]
+                )
+            )
+
+        system_rows = []
+        for key in SYSTEM_KEYS_ORDER:
+            if key not in payload:
+                continue
+            meta = payload[key]
+            system_rows.append(
+                html.Tr(
+                    [
+                        html.Td(key),
+                        html.Td(_format_value(meta["value"])),
+                        html.Td(_format_value(meta["default"])),
+                        html.Td(meta["source"]),
+                        html.Td("yes" if meta["restart_required"] else "no"),
+                    ]
+                )
+            )
+
+        return dbc.Container(
+            [
+                generate_navbar(),
+                html.H2("Settings", className="text-center my-3"),
+                html.H4("Runtime Settings", className="mt-4"),
+                dbc.Table(
+                    [
+                        html.Thead(
+                            html.Tr(
+                                [
+                                    html.Th("Key"),
+                                    html.Th("Value"),
+                                    html.Th("Default"),
+                                    html.Th("Source"),
+                                    html.Th("Restart"),
+                                ]
+                            )
+                        ),
+                        html.Tbody(runtime_rows),
+                    ],
+                    bordered=True,
+                    striped=True,
+                    hover=True,
+                    responsive=True,
+                ),
+                dbc.Button("Apply", id="settings-apply", color="primary"),
+                html.Div(id="settings-status", className="mt-3"),
+                html.H4("System Settings (Read-only)", className="mt-5"),
+                dbc.Table(
+                    [
+                        html.Thead(
+                            html.Tr(
+                                [
+                                    html.Th("Key"),
+                                    html.Th("Value"),
+                                    html.Th("Default"),
+                                    html.Th("Source"),
+                                    html.Th("Restart"),
+                                ]
+                            )
+                        ),
+                        html.Tbody(system_rows),
+                    ],
+                    bordered=True,
+                    striped=True,
+                    hover=True,
+                    responsive=True,
+                ),
+            ],
+            fluid=True,
+        )
 
     def gallery_layout():
         """Layout for the gallery page (calls generate_gallery which uses classes)."""
@@ -2310,6 +2495,8 @@ def create_web_interface(detection_manager):
             return generate_gallery(), no_update
         elif pathname == "/species":
             return species_summary_layout(), no_update
+        elif pathname == "/settings":
+            return settings_layout(), no_update
         elif pathname == "/" or pathname is None or pathname == "":
             return stream_layout(), no_update
         # --- 404 ---
@@ -2335,6 +2522,34 @@ def create_web_interface(detection_manager):
             )
 
     # Callback to update the selected images store based on checkboxes
+    @app.callback(
+        Output("settings-status", "children"),
+        Input("settings-apply", "n_clicks"),
+        State({"type": "runtime-setting", "key": ALL}, "value"),
+        State({"type": "runtime-setting", "key": ALL}, "id"),
+        prevent_initial_call=True,
+    )
+    def apply_runtime_settings(n_clicks, values, ids):
+        if not n_clicks:
+            raise PreventUpdate
+        updates = {}
+        for value, meta in zip(values, ids):
+            updates[meta["key"]] = value
+        valid, errors = validate_runtime_updates(updates)
+        if errors:
+            messages = [f"{key}: {msg}" for key, msg in errors.items()]
+            return dbc.Alert(
+                html.Ul([html.Li(msg) for msg in messages]),
+                color="danger",
+                dismissable=True,
+            )
+        update_runtime_settings(valid)
+        return dbc.Alert(
+            "Runtime settings updated. Changes apply immediately where supported.",
+            color="success",
+            dismissable=True,
+        )
+
     @app.callback(
         Output("selected-images-store", "data"),
         Input(
