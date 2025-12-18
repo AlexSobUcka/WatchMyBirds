@@ -37,9 +37,13 @@ from config import (
 from utils.db import (
     get_connection,
     fetch_all_images,
+    fetch_daily_covers,
     fetch_images_by_date,
     delete_images_by_names,
     update_downloaded_timestamp,
+    fetch_image_summaries,
+    fetch_day_images,
+    fetch_hourly_counts,
 )
 
 config = get_config()
@@ -53,8 +57,9 @@ import pandas as pd
 
 
 # >>> Caching settings for gallery functions >>>
-_CACHE_TIMEOUT = 10  # Set cache timeout in seconds
+_CACHE_TIMEOUT = 60  # Set cache timeout in seconds
 _cached_images = {"images": None, "timestamp": 0}
+_species_summary_cache = {"payload": None, "timestamp": 0}
 
 
 def create_web_interface(detection_manager):
@@ -162,9 +167,28 @@ def create_web_interface(detection_manager):
             logger.error(f"Error reading images from SQLite: {e}")
         return images
 
+    def get_daily_covers():
+        """Returns a dict of {YYYY-MM-DD: relative_path} for gallery overview."""
+        covers = {}
+        try:
+            rows = fetch_daily_covers(db_conn)
+            for row in rows:
+                date_key = row["date_key"]
+                optimized_name = row["optimized_name"]
+                if not date_key or not optimized_name:
+                    continue
+                formatted_date = (
+                    f"{date_key[:4]}-{date_key[4:6]}-{date_key[6:]}"
+                )
+                rel_path = os.path.join(date_key, optimized_name)
+                covers[formatted_date] = rel_path
+        except Exception as e:
+            logger.error(f"Error reading daily covers from SQLite: {e}")
+        return covers
+
     def get_captured_images():
         """
-        Returns a list of captured optimized images using the CSV-based approach.
+        Returns a list of captured optimized images without coco_json.
         Uses caching to avoid repeated disk reads.
         """
         now = time.time()
@@ -173,7 +197,32 @@ def create_web_interface(detection_manager):
             and (now - _cached_images["timestamp"]) < _CACHE_TIMEOUT
         ):
             return _cached_images["images"]
-        images = get_all_images()
+        images = []
+        try:
+            rows = fetch_image_summaries(db_conn)
+            for row in rows:
+                timestamp = row["timestamp"]
+                optimized_name = row["optimized_name"]
+                best_class = row["best_class"]
+                best_class_conf = row["best_class_conf"]
+                top1_class = row["top1_class_name"]
+                top1_conf = row["top1_confidence"]
+                if not timestamp or not optimized_name:
+                    continue
+                date_folder = timestamp[:8]
+                rel_path = os.path.join(date_folder, optimized_name)
+                images.append(
+                    (
+                        timestamp,
+                        rel_path,
+                        best_class,
+                        best_class_conf,
+                        top1_class,
+                        top1_conf,
+                    )
+                )
+        except Exception as e:
+            logger.error(f"Error reading image summaries from SQLite: {e}")
         _cached_images["images"] = images
         _cached_images["timestamp"] = now
         return images
@@ -616,6 +665,13 @@ def create_web_interface(detection_manager):
         Generates a gallery of the best detector result for each species across all time,
         considering only detections above the confidence threshold.
         """
+        now = time.time()
+        cached_payload = _species_summary_cache.get("payload") or {}
+        if (
+            cached_payload.get("detector") is not None
+            and (now - _species_summary_cache["timestamp"]) < 600
+        ):
+            return cached_payload["detector"]
         all_images = get_captured_images()  # Get all images (uses cache)
         best_images_all_time = {}  # Dictionary to store best image per species
 
@@ -685,10 +741,21 @@ def create_web_interface(detection_manager):
             gallery_items.append(tile)
             modals.append(create_image_modal_layout(img, i, modal_id_prefix))
 
-        return html.Div(gallery_items + modals, className="gallery-grid-container")
+        payload = html.Div(gallery_items + modals, className="gallery-grid-container")
+        _species_summary_cache["payload"] = _species_summary_cache["payload"] or {}
+        _species_summary_cache["payload"]["detector"] = payload
+        _species_summary_cache["timestamp"] = now
+        return payload
 
     def generate_all_time_classifier_summary():
         """Generates a gallery of the best classifier result for each species across all time."""
+        now = time.time()
+        cached_payload = _species_summary_cache.get("payload") or {}
+        if (
+            cached_payload.get("classifier") is not None
+            and (now - _species_summary_cache["timestamp"]) < 600
+        ):
+            return cached_payload["classifier"]
         all_images = get_captured_images()  # Get all images (uses cache)
         best_classifier_images_all_time = (
             {}
@@ -750,10 +817,21 @@ def create_web_interface(detection_manager):
             gallery_items.append(tile)
             modals.append(create_image_modal_layout(img, i, modal_id_prefix))
 
-        return html.Div(gallery_items + modals, className="gallery-grid-container")
+        payload = html.Div(gallery_items + modals, className="gallery-grid-container")
+        _species_summary_cache["payload"] = _species_summary_cache["payload"] or {}
+        _species_summary_cache["payload"]["classifier"] = payload
+        _species_summary_cache["timestamp"] = now
+        return payload
 
     def generate_all_time_fused_summary_agreement():
         """Generates a gallery based on agreement and multiplicative score."""
+        now = time.time()
+        cached_payload = _species_summary_cache.get("payload") or {}
+        if (
+            cached_payload.get("agreement") is not None
+            and (now - _species_summary_cache["timestamp"]) < 600
+        ):
+            return cached_payload["agreement"]
         all_images = get_captured_images()
         best_results_per_species = (
             {}
@@ -832,10 +910,21 @@ def create_web_interface(detection_manager):
                 create_image_modal_layout(img, i, modal_id_prefix)
             )  # Standard modal layout
 
-        return html.Div(gallery_items + modals, className="gallery-grid-container")
+        payload = html.Div(gallery_items + modals, className="gallery-grid-container")
+        _species_summary_cache["payload"] = _species_summary_cache["payload"] or {}
+        _species_summary_cache["payload"]["agreement"] = payload
+        _species_summary_cache["timestamp"] = now
+        return payload
 
     def generate_all_time_fused_summary_weighted():
         """Generates a gallery based on weighted score, prioritizing classifier label."""
+        now = time.time()
+        cached_payload = _species_summary_cache.get("payload") or {}
+        if (
+            cached_payload.get("weighted") is not None
+            and (now - _species_summary_cache["timestamp"]) < 600
+        ):
+            return cached_payload["weighted"]
         all_images = get_captured_images()
         best_results_per_species = (
             {}
@@ -924,7 +1013,11 @@ def create_web_interface(detection_manager):
                 create_image_modal_layout(img, i, modal_id_prefix)
             )  # Standard modal layout
 
-        return html.Div(gallery_items + modals, className="gallery-grid-container")
+        payload = html.Div(gallery_items + modals, className="gallery-grid-container")
+        _species_summary_cache["payload"] = _species_summary_cache["payload"] or {}
+        _species_summary_cache["payload"]["weighted"] = payload
+        _species_summary_cache["timestamp"] = now
+        return payload
 
     def species_summary_layout():
         """Layout for the all-time species summary page."""
@@ -1235,10 +1328,8 @@ def create_web_interface(detection_manager):
 
     def generate_gallery():
         """Generates the main gallery page with daily subgallery links, including the logo."""
-        images_by_date = get_captured_images_by_date()
-
-        # Sort dates descending (newest first)
-        sorted_dates = sorted(images_by_date.keys(), reverse=True)
+        daily_covers = get_daily_covers()
+        sorted_dates = sorted(daily_covers.keys(), reverse=True)
 
         grid_items = []
         if not sorted_dates:
@@ -1250,12 +1341,9 @@ def create_web_interface(detection_manager):
             )
         else:
             for date in sorted_dates:
-                images = images_by_date[date]
-                if not images:
-                    continue  # Skip if a date folder exists but is empty
-                # Use the first image of the day as the representative thumbnail
-                # Ensure the tuple structure is correct (filename is the first element)
-                thumbnail_rel_path = images[0][0]
+                thumbnail_rel_path = daily_covers.get(date)
+                if not thumbnail_rel_path:
+                    continue
                 # Derive the zoomed filename for the thumbnail link display
                 thumbnail_display_path = derive_zoomed_filename(thumbnail_rel_path)
 
@@ -1294,11 +1382,22 @@ def create_web_interface(detection_manager):
         """
         # Get today's date for comparison >>> ---
         today_date_iso = datetime.now().strftime("%Y-%m-%d")
-        df = read_csv_for_date(date)
-        # get_captured_images_by_date() is no longer the primary source here,
-        # but still used by summaries if page == 1 and include_header == True
-        images_by_date_for_summaries = get_captured_images_by_date()
-        images_for_summary = images_by_date_for_summaries.get(date, [])
+        rows = fetch_day_images(db_conn, date)
+        df = _rows_to_df(rows)
+        images_for_summary = []
+        for row in rows:
+            optimized_name = row["optimized_name"]
+            if not optimized_name:
+                continue
+            images_for_summary.append(
+                (
+                    os.path.join(date.replace("-", ""), optimized_name),
+                    row["best_class"],
+                    row["best_class_conf"],
+                    row["top1_class_name"],
+                    row["top1_confidence"],
+                )
+            )
 
         if (
             df.empty and not images_for_summary
@@ -1319,8 +1418,7 @@ def create_web_interface(detection_manager):
                 fluid=True,
             )
 
-        images_by_date = get_captured_images_by_date()
-        images_for_this_date = images_by_date.get(date, [])
+        images_for_this_date = images_for_summary
         total_images = len(images_for_this_date)
         total_pages = math.ceil(total_images / PAGE_SIZE) or 1
         page = max(1, min(page, total_pages))
@@ -1616,19 +1714,17 @@ def create_web_interface(detection_manager):
         Handles empty data gracefully and is compatible with Plotly.
         """
         # Get all captured images
-        all_images = get_captured_images()
-        today_str = datetime.now().strftime("%Y%m%d")
+        today_str = datetime.now().strftime("%Y-%m-%d")
 
         # Initialize count for all 24 hours
         counts = {f"{hour:02d}": 0 for hour in range(24)}
 
-        # Count detections per hour for today
-        for ts, *_ in all_images:
-            if ts and ts.startswith(today_str):
-                # Assuming timestamp format "YYYYMMDD_HHMMSS"
-                hour = ts[9:11]
-                if hour in counts:
-                    counts[hour] += 1
+        # Fetch aggregated counts from DB
+        rows = fetch_hourly_counts(db_conn, today_str)
+        for row in rows:
+            hour = row["hour"]
+            if hour in counts:
+                counts[hour] = row["count"]
 
         # Create lists for plotting
         hours = list(counts.keys())

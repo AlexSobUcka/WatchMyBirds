@@ -47,6 +47,9 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_images_timestamp ON images(timestamp DESC);"
     )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_images_optimized_name ON images(optimized_name);"
+    )
 
 
 def insert_image(conn: sqlite3.Connection, row: Dict[str, Any]) -> None:
@@ -102,6 +105,25 @@ def fetch_all_images(conn: sqlite3.Connection) -> List[sqlite3.Row]:
     return cur.fetchall()
 
 
+def fetch_image_summaries(conn: sqlite3.Connection) -> List[sqlite3.Row]:
+    """Fetches summary fields without coco_json for UI lists/summaries."""
+    cur = conn.execute(
+        """
+        SELECT
+            timestamp,
+            optimized_name,
+            best_class,
+            best_class_conf,
+            top1_class_name,
+            top1_confidence,
+            downloaded_timestamp
+        FROM images
+        ORDER BY timestamp DESC;
+        """
+    )
+    return cur.fetchall()
+
+
 def fetch_images_by_date(conn: sqlite3.Connection, date_str_iso: str) -> List[sqlite3.Row]:
     """date_str_iso: YYYY-MM-DD; matches timestamp prefix YYYYMMDD_."""
     date_prefix = date_str_iso.replace("-", "")
@@ -123,6 +145,68 @@ def fetch_images_by_date(conn: sqlite3.Connection, date_str_iso: str) -> List[sq
         ORDER BY timestamp DESC;
         """,
         (date_prefix,),
+    )
+    return cur.fetchall()
+
+
+def fetch_day_images(conn: sqlite3.Connection, date_str_iso: str) -> List[sqlite3.Row]:
+    """Fetches all fields for a single day (YYYY-MM-DD), ordered by timestamp DESC."""
+    date_prefix = date_str_iso.replace("-", "")
+    cur = conn.execute(
+        """
+        SELECT
+            timestamp,
+            original_name,
+            optimized_name,
+            zoomed_name,
+            best_class,
+            best_class_conf,
+            top1_class_name,
+            top1_confidence,
+            coco_json,
+            downloaded_timestamp
+        FROM images
+        WHERE timestamp LIKE ? || '%'
+        ORDER BY timestamp DESC;
+        """,
+        (date_prefix,),
+    )
+    return cur.fetchall()
+
+
+def fetch_hourly_counts(conn: sqlite3.Connection, date_str_iso: str) -> List[sqlite3.Row]:
+    """Returns hourly counts for a given date (YYYY-MM-DD)."""
+    date_prefix = date_str_iso.replace("-", "")
+    cur = conn.execute(
+        """
+        SELECT
+            substr(timestamp, 10, 2) AS hour,
+            COUNT(*) AS count
+        FROM images
+        WHERE timestamp LIKE ? || '%'
+        GROUP BY hour
+        ORDER BY hour;
+        """,
+        (date_prefix,),
+    )
+    return cur.fetchall()
+
+
+def fetch_daily_covers(conn: sqlite3.Connection) -> List[sqlite3.Row]:
+    """Returns the newest optimized image per day for the gallery overview."""
+    cur = conn.execute(
+        """
+        SELECT
+            substr(timestamp, 1, 8) AS date_key,
+            optimized_name
+        FROM images
+        WHERE timestamp IN (
+            SELECT MAX(timestamp)
+            FROM images
+            GROUP BY substr(timestamp, 1, 8)
+        )
+        ORDER BY date_key DESC;
+        """
     )
     return cur.fetchall()
 
