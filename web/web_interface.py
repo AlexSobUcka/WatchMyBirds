@@ -1419,7 +1419,23 @@ def create_web_interface(detection_manager):
                         ),
                         dbc.Col(
                             [
-                                html.Label("Classifier max conf", className="fw-semibold"),
+                                html.Label("Detector max conf", className="fw-semibold"),
+                                dbc.Input(
+                                    id="edit-filter-detector-max",
+                                    type="number",
+                                    min=0,
+                                    max=1,
+                                    step=0.05,
+                                    value=1,
+                                    style={"maxWidth": "120px"},
+                                ),
+                            ],
+                            width="auto",
+                            className="me-3",
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label("Classifier min conf", className="fw-semibold"),
                                 dbc.Input(
                                     id="edit-filter-classifier-min",
                                     type="number",
@@ -1427,6 +1443,22 @@ def create_web_interface(detection_manager):
                                     max=1,
                                     step=0.05,
                                     value=0,
+                                    style={"maxWidth": "140px"},
+                                ),
+                            ],
+                            width="auto",
+                            className="me-3",
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label("Classifier max conf", className="fw-semibold"),
+                                dbc.Input(
+                                    id="edit-filter-classifier-max",
+                                    type="number",
+                                    min=0,
+                                    max=1,
+                                    step=0.05,
+                                    value=1,
                                     style={"maxWidth": "140px"},
                                 ),
                             ],
@@ -3175,11 +3207,13 @@ def create_web_interface(detection_manager):
         State("edit-filter-status", "value"),
         State("edit-sort", "value"),
         State("edit-filter-detector-min", "value"),
+        State("edit-filter-detector-max", "value"),
         State("edit-filter-classifier-min", "value"),
+        State("edit-filter-classifier-max", "value"),
         State("url", "pathname"),
         prevent_initial_call=True,
     )
-    def apply_edit_filters(n_clicks, filter_status, sort_value, det_min, cls_min, pathname):
+    def apply_edit_filters(n_clicks, filter_status, sort_value, det_min, det_max, cls_min, cls_max, pathname):
         match = re.search(r"/edit/(\d{4}-\d{2}-\d{2})", pathname or "")
         if not match:
             raise PreventUpdate
@@ -3207,8 +3241,18 @@ def create_web_interface(detection_manager):
         except Exception:
             pass
         try:
+            if det_max is not None:
+                df = df[pd.to_numeric(df["best_class_conf"], errors="coerce") <= float(det_max)]
+        except Exception:
+            pass
+        try:
             if cls_min is not None:
                 df = df[pd.to_numeric(df["top1_confidence"], errors="coerce") >= float(cls_min)]
+        except Exception:
+            pass
+        try:
+            if cls_max is not None:
+                df = df[pd.to_numeric(df["top1_confidence"], errors="coerce") <= float(cls_max)]
         except Exception:
             pass
         # Sort
