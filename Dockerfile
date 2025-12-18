@@ -7,24 +7,19 @@ RUN apt-get update && \
     ffmpeg \
     libglib2.0-0 \
     libsm6 \
-    libavcodec-dev \
-    libavformat-dev \
-    libswscale-dev \
     libopenjp2-7 \
-    gosu \
-    libxml2 \
-    libxslt1.1 && \
+    gosu && \
     apt-get autoremove -y && \
     apt-get autoclean -y && \
     rm -rf /var/lib/apt/lists/*
 
 # Set environment variables
-ENV MPLCONFIGDIR=/tmp/matplotlib \
-    XDG_CACHE_HOME=/tmp/fontconfig \
+ENV XDG_CACHE_HOME=/tmp/fontconfig \
     FONTCONFIG_PATH=/tmp/fontconfig \
     DEBUG_MODE=False \
     VIDEO_SOURCE=0 \
-    OUTPUT_DIR=/output
+    OUTPUT_DIR=/output \
+    MODEL_BASE_PATH=/models
 
 # Set the working directory
 WORKDIR /app
@@ -41,7 +36,11 @@ LABEL org.opencontainers.image.title="WatchMyBirds" \
       org.opencontainers.image.revision="${GIT_COMMIT}" \
       org.opencontainers.image.created="${BUILD_DATE}"
 
-# Copy only requirements.txt first to leverage Docker cache for dependency installation
+# Going for CPU-only for now
+RUN pip install --no-cache-dir \
+    --index-url https://download.pytorch.org/whl/cpu \
+    torch==2.9.1 torchvision==0.24.1
+
 COPY requirements.txt /app/requirements.txt
 
 # Install Python dependencies (upgrade pip, setuptools, and wheel first)
@@ -49,25 +48,22 @@ RUN python -m pip install --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application source code
-COPY models ./models
 COPY assets ./assets
-COPY output ./output
-COPY README.md ./
-COPY utils ./utils
-COPY logging_config.py ./
-COPY main.py ./
-COPY config.py ./
 COPY camera ./camera
 COPY detectors ./detectors
+COPY utils ./utils
 COPY web ./web
+COPY config.py ./
+COPY logging_config.py ./
+COPY main.py ./
+COPY README.md ./
+
+# Create runtime directories (no model/output copy at build time)
+RUN mkdir -p /models /output
 
 # Add the entrypoint script
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-
-# Clean up Python cache and compiled files
-RUN find /usr/local/lib/python3.12 -type d -name '__pycache__' -exec rm -rf {} + && \
-    find /usr/local/lib/python3.12 -type f -name '*.pyc' -delete
 
 # Expose the port used by your app
 EXPOSE 8050

@@ -1,37 +1,40 @@
-   version: '3'
-   services:
-     watchmybirds:
-       image: starminworks/watchmybirds:latest
-       container_name: watchmybirds
-       environment:
-         - VIDEO_SOURCE=rtsp://user:password@192.168.0.2:554/1  # Replace with your RTSP stream
-         - PUID=1000  # User ID (UID) to run the container with proper permissions.
-         - PGID=1000   # Group ID (GID) to ensure correct file access within the container.
-         - TZ=Europe/Berlin  # Set your local timezone to ensure correct timestamp logging.
-         - DEBUG_MODE=False  # Set to "True" for additional logging output for debugging.
-
-
-         # (optional) - CONFIDENCE_THRESHOLD_DETECTION=0.55  # Minimum confidence score for an object to be considered detected.
-         # (optional) - SAVE_THRESHOLD=0.55  # Minimum confidence score for saving an image of a detected object.
-         # (optional) - MAX_FPS_DETECTION=1  # Limit detection FPS to reduce CPU/GPU usage (higher values increase load).
-         # (optional) - MODEL_BASE_PATH="models"  # Base directory for cached models.
-         # (optional) - STREAM_FPS=3  # Maximum FPS for the video stream output.
-         # (optional) - STREAM_WIDTH_OUTPUT_RESIZE=800  # Resize the output stream width to optimize performance.
-         # (optional) - TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN  # Token for Telegram bot notifications (replace with your actual bot token).
-         # (optional) - TELEGRAM_CHAT_ID=YOUR_CHAT_ID  # Telegram chat ID to send detection alerts to.
-         # (optional) - DAY_AND_NIGHT_CAPTURE=False  # Set to "True" to allow detection at night; "False" stops detection at night.
-         # (optional) - DAY_AND_NIGHT_CAPTURE_LOCATION="Berlin"  # The location to determine daylight hours (used for night mode).
-         # (optional) - LOCATION_DATA="52.516, 13.377"  # The location to determine daylight hours (used for night mode).
-         # (optional) - CPU_LIMIT=1  # Limit the container to use only 1 CPU core to optimize resource usage.
-         # (optional) - TELEGRAM_COOLDOWN=5  # Delay Telegram Notifications in seconds
-       volumes:
-         - /your_path/output:/output  # Path for saving output
-         - /your_path/models:/models  # Path for your model of choice
-       ports:
-         - "8050:8050"  # HTTP port for the Flask web app (streaming and API).
-         - "8554:8554"  # RTSP port for serving the video stream.
-         - "8081:8081"  # MJPEG streaming port.
-         - "1936:1936"  # Custom RTMP or alternative streaming port.
-         - "8889:8889"  # Custom port for additional services (if needed).
-         - "8189:8189/udp"  # UDP port for specific video streaming protocols.
-       restart: unless-stopped  # Ensures the container restarts automatically unless manually stopped.
+version: "3"
+services:
+  watchmybirds:
+    image: starminworks/watchmybirds:latest
+    container_name: watchmybirds
+    environment:
+      - VIDEO_SOURCE=rtsp://user:password@192.168.0.2:554/1  # Required: camera source (int for webcam or RTSP/HTTP URL)
+      - OUTPUT_DIR=/output                                   # Where images and images.db are stored (match the volume mount)
+      - MODEL_BASE_PATH=/models                              # Where models are cached
+      - PUID=1000                                            # UID for file ownership inside the container
+      - PGID=1000                                            # GID for file ownership inside the container
+      - TZ=Europe/Berlin                                     # Timezone for timestamps
+      - DEBUG_MODE=False                                     # Set True for verbose logging
+      # Optional tuning
+      - STREAM_WIDTH_OUTPUT_RESIZE=640                       # Preview width for live stream
+      - STREAM_FPS=0                                         # UI MJPEG throttle (0 = no throttle)
+      - STREAM_FPS_CAPTURE=0                                 # Capture throttle (0 = no throttle)
+      - CONFIDENCE_THRESHOLD_DETECTION=0.55                  # Detector display threshold
+      - SAVE_THRESHOLD=0.55                                  # Detector save threshold
+      - MAX_FPS_DETECTION=0.5                                # Target detection loop rate (FPS)
+      - CLASSIFIER_CONFIDENCE_THRESHOLD=0.55                 # Classifier display threshold
+      - FUSION_ALPHA=0.5                                     # Fusion weight detector vs classifier
+      - DAY_AND_NIGHT_CAPTURE=True                           # Daylight gating
+      - DAY_AND_NIGHT_CAPTURE_LOCATION=Berlin                # City name for daylight check
+      - LOCATION_DATA="52.516, 13.377"                       # GPS for EXIF (lat, lon)
+      - CPU_LIMIT=1                                          # CPU affinity cap (<=0 disables)
+      - TELEGRAM_COOLDOWN=5                                  # Seconds between Telegram alerts
+      - TELEGRAM_ENABLED=True                                # Gate sending; tokens/chat IDs remain env-only
+      - EDIT_PASSWORD=SECRET_PASSWORD                        # Password for edit page
+      # Telegram credentials (required if Telegram enabled)
+      - TELEGRAM_BOT_TOKEN=your_token_here
+      - TELEGRAM_CHAT_ID=your_chat_id_here
+      # Model choice (currently yolo)
+      - DETECTOR_MODEL_CHOICE=yolo
+    volumes:
+      - /your_path/output:/output    # Must match OUTPUT_DIR
+      - /your_path/models:/models    # Must match MODEL_BASE_PATH
+    ports:
+      - "8050:8050"  # Web UI
+    restart: unless-stopped

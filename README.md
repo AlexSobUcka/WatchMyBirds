@@ -79,6 +79,9 @@ docker-compose up -d
   - First successful stream probe is persisted (`output/stream_settings.json` with validation: URL, stream type, FFmpeg version); cache writes are atomic and reused at restart to skip probing
 - **Fast Web UI Startup**
   - Web UI starts immediately; stream status loads asynchronously with placeholders/fallbacks when the camera is not yet ready
+- **Landing Page Context (Lightweight)**
+  - Shows today's count, hourly chart, latest detections, and a lazy-loaded species summary without delaying initial render
+  - Now also lazy-loads the gallery-style Daily Summary for today after first paint
 
 
 ---
@@ -88,6 +91,63 @@ docker-compose up -d
 - `STREAM_FPS_CAPTURE` (default `0`) throttles frame capture; `0` disables throttling for freshest frames.
 - `STREAM_FPS` (default `0`) throttles the UI MJPEG feed only; set a positive value to reduce UI bandwidth/CPU.
 - Configuration is loaded once via `get_config()` and shared across modules to avoid divergent settings.
+- `CPU_LIMIT` is applied via `restrict_to_cpus` using the shared config; set to 0 or below to skip affinity.
+- Persistence: detections are stored in `OUTPUT_DIR/images.db` (SQLite, WAL) with the same fields as the former per-day CSV logs; rows now include `detector_model_id` / `classifier_model_id` for provenance.
+
+---
+
+## ⚙️ Configuration Reference (.env / docker-compose)
+Set these as environment variables in your `.env` or docker-compose `environment:`. Defaults are shown.
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `DEBUG_MODE` | `False` | Enable verbose logging and debug behavior. |
+| `OUTPUT_DIR` | `/output` | Base directory for images and `images.db`. |
+| `VIDEO_SOURCE` | `0` | Camera source (int for webcam, string for RTSP/HTTP). |
+| `LOCATION_DATA` | `52.516, 13.377` | GPS lat/lon for EXIF (`"lat, lon"`). |
+| `DETECTOR_MODEL_CHOICE` | `yolo` | Detection model selector (currently `yolo`). |
+| `CONFIDENCE_THRESHOLD_DETECTION` | `0.55` | Detector confidence threshold for display logic. |
+| `SAVE_THRESHOLD` | `0.55` | Detector confidence threshold to save a detection. |
+| `MAX_FPS_DETECTION` | `0.5` | Target detection loop rate (FPS). |
+| `MODEL_BASE_PATH` | `/models` | Base directory for model files. |
+| `CLASSIFIER_CONFIDENCE_THRESHOLD` | `0.55` | Classifier confidence threshold for gallery summaries. |
+| `FUSION_ALPHA` | `0.5` | Detector/classifier fusion weight in UI summaries. |
+| `STREAM_FPS_CAPTURE` | `0` | Capture throttle (0 disables throttling). |
+| `STREAM_FPS` | `0` | UI MJPEG feed throttle (0 disables throttling). |
+| `STREAM_WIDTH_OUTPUT_RESIZE` | `640` | Width for the live stream preview in the UI. |
+| `DAY_AND_NIGHT_CAPTURE` | `True` | Enable daylight gating for detections. |
+| `DAY_AND_NIGHT_CAPTURE_LOCATION` | `Berlin` | City name for Astral daylight check. |
+| `CPU_LIMIT` | `1` | CPU affinity cap (<=0 disables affinity). |
+| `TELEGRAM_COOLDOWN` | `5` | Cooldown (seconds) between Telegram alerts. |
+| `TELEGRAM_ENABLED` | `True` | Enables/disables Telegram sends (tokens remain env-only). |
+| `EDIT_PASSWORD` | `SECRET_PASSWORD` | Password for edit page access in the UI. |
+
+Telegram env vars (read directly by `utils/telegram_notifier.py`, not via `config.py`):
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `TELEGRAM_BOT_TOKEN` | (empty) | Bot token for notifications. |
+| `TELEGRAM_CHAT_ID` | (empty) | Chat ID or JSON array of chat IDs. |
+
+Unused settings: none found in current code; all keys in `config.py` are referenced.
+
+---
+
+## 🧩 Configuration Model (Boot vs Runtime)
+The app uses two layers of configuration:
+
+**Boot / Infrastructure (read-only at runtime)**  
+Loaded once from `.env`/Docker and shown as read-only in the UI. Changes require a restart.
+
+**Runtime Settings (UI-editable)**  
+Stored in `OUTPUT_DIR/settings.yaml`, applied without changing startup semantics.
+
+Merge order:
+```
+defaults → env → settings.yaml
+```
+
+Runtime edits update `settings.yaml` only (no `.env` mutation).
 
 ---
 
@@ -96,7 +156,6 @@ docker-compose up -d
 |------------------------------------------------|---------------------|---------|-----------------------------------------------------------------|
 | **Low-priced PTZ Camera**                      | RTSP                | ✅ Works | Stable RTSP stream verified.                                    |
 | **Raspberry Pi 3 + Zero 2 + Raspberry Pi Cam** | MotionEye OS (HTTP Stream) | ✅ Works |                                                                 |
-| **Seeking Sponsors**                           | N/A                | ❓ Pending | Looking for sponsors to provide more camera models for testing. |
 
 🔹 *Planned: Expanding RTSP camera compatibility & adding PTZ control.*
 
@@ -106,13 +165,6 @@ docker-compose up -d
 
 
 ## 📌 Share Your Results
-Have you tested **WatchMyBirds** on another **Synology NAS, IP camera, or edge device**?  
-Help expand this list! Share your results by opening an issue or pull request on GitHub with:
-- Device model & specs
-- OS / Docker setup
-- Measured FPS or detection performance
-- Additional observations  
-
 Your contributions help improve **WatchMyBirds** for everyone! 🚀
 
 
@@ -155,6 +207,7 @@ Your contributions help improve **WatchMyBirds** for everyone! 🚀
 
 
 This will run the **WatchMyBirds** application, and you can access the livestream at `http://<your-server-ip>:8050`.
+The image creates `/models` and `/output` at build time; models are downloaded at runtime as needed.
 
 
 
@@ -177,6 +230,7 @@ This will run the **WatchMyBirds** application, and you can access the livestrea
    ```bash
    pip install -r requirements.txt
    ```
+   `requirements.txt` lists direct dependencies only; pip will resolve transitive packages.
 
 
 4. **Configure the Video Source**:
@@ -204,10 +258,7 @@ For a webcam connected via USB use:
    - Local: `http://localhost:8050`
    - Remote: `http://<your-server-ip>:8050`
 
-
 ---
-
-
 
 ## 🤝 Contributing
 
