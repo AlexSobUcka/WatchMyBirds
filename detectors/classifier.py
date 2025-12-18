@@ -12,7 +12,7 @@ import torchvision.transforms as transforms
 
 from config import get_config
 from logging_config import get_logger
-from utils.model_downloader import ensure_model_files
+from utils.model_downloader import ensure_model_files, load_latest_identifier
 
 logger = get_logger(__name__)
 
@@ -29,6 +29,9 @@ class ImageClassifier:
         self.model_path, self.class_path = ensure_model_files(
             HF_BASE_URL, model_dir, "weights_path", "classes_path"
         )
+        ident = load_latest_identifier(model_dir)
+        self.model_id = ident if ident else os.path.basename(self.model_path)
+        self.model_id = load_latest_identifier(model_dir)
         try:
             self.ort_session = ort.InferenceSession(
                 self.model_path, providers=["CPUExecutionProvider"]

@@ -4,7 +4,7 @@
 # ------------------------------------------------------------------------------
 from config import get_config
 from logging_config import get_logger
-from utils.model_downloader import ensure_model_files
+from utils.model_downloader import ensure_model_files, load_latest_identifier
 import os
 import cv2
 import numpy as np
@@ -43,6 +43,8 @@ class ONNXDetectionModel(BaseDetectionModel):
         self.model_path, self.labels_path = ensure_model_files(
             HF_BASE_URL, model_dir, "weights_path_onnx", "labels_path"
         )
+        ident = load_latest_identifier(model_dir)
+        self.model_id = ident if ident else os.path.basename(self.model_path)
 
         # Initialize ONNX Runtime session.  Handles potential errors.
         try:
@@ -251,6 +253,7 @@ class Detector:
         self.model_choice = model_choice.lower()
         if self.model_choice == "yolo":  # Corrected model choice
             self.model = ONNXDetectionModel(debug=debug)
+            self.model_id = getattr(self.model, "model_id", "")
         else:
             raise ValueError(f"Unsupported model choice: {self.model_choice}")
 

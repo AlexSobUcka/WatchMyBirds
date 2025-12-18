@@ -92,6 +92,23 @@ def fetch_latest_json(base_url: str, cache_dir: str) -> Dict[str, str]:
         raise
 
 
+def load_latest_identifier(model_dir: str) -> str:
+    """
+    Loads the model identifier from latest_models.json if present.
+    Returns empty string when unavailable.
+    """
+    latest_path = os.path.join(model_dir, "latest_models.json")
+    if not os.path.exists(latest_path):
+        return ""
+    try:
+        with open(latest_path, "r", encoding="utf-8") as file:
+            data = json.load(file)
+        latest = data.get("latest")
+        return latest if isinstance(latest, str) else ""
+    except Exception:
+        return ""
+
+
 def ensure_model_files(
     base_url: str, model_dir: str, weights_key: str, labels_key: str
 ) -> Tuple[str, str]:

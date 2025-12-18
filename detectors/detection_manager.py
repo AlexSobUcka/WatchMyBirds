@@ -173,6 +173,7 @@ class DetectionManager:
 
         # Initializes the classifier.
         self.classifier = ImageClassifier()
+        self.classifier_model_id = getattr(self.classifier, "model_id", "")
         print("Classifier initialized.")
 
         # Locks for thread-safe operations.
@@ -198,6 +199,7 @@ class DetectionManager:
         # Video capture and detector instances.
         self.video_capture = None
         self.detector_instance = None
+        self.detector_model_id = ""
         self.processing_queue = queue.Queue(maxsize=1)
         self.db_conn = get_connection()
 
@@ -278,6 +280,10 @@ class DetectionManager:
                 self.detector_instance = Detector(
                     model_choice=self.model_choice, debug=self.debug
                 )
+                model_id = getattr(self.detector_instance, "model_id", "") or ""
+                if not model_id and hasattr(self.detector_instance, "model_path"):
+                    model_id = os.path.basename(self.detector_instance.model_path)
+                self.detector_model_id = model_id
                 logger.info("Detector initialized in DetectionManager.")
             except Exception as e:
                 logger.error(f"Failed to initialize detector: {e}")
@@ -450,6 +456,10 @@ class DetectionManager:
                         self.detector_instance = Detector(
                             model_choice=self.model_choice, debug=self.debug
                         )
+                        model_id = getattr(self.detector_instance, "model_id", "") or ""
+                        if not model_id and hasattr(self.detector_instance, "model_path"):
+                            model_id = os.path.basename(self.detector_instance.model_path)
+                        self.detector_model_id = model_id
                     except Exception as e2:
                         logger.error(f"Detector reinitialization failed: {e2}")
                 time.sleep(1)
@@ -702,6 +712,8 @@ class DetectionManager:
                         "top1_confidence": top1_confidence,
                         "coco_json": coco_json,
                         "downloaded_timestamp": "",
+                        "detector_model_id": self.detector_model_id,
+                        "classifier_model_id": self.classifier_model_id,
                     },
                 )
             except Exception as e:

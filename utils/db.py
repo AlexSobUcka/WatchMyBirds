@@ -40,7 +40,9 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             top1_class_name TEXT,
             top1_confidence REAL,
             coco_json TEXT,
-            downloaded_timestamp TEXT
+            downloaded_timestamp TEXT,
+            detector_model_id TEXT,
+            classifier_model_id TEXT
         );
         """
     )
@@ -56,6 +58,16 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_images_top1_class_name ON images(top1_class_name);"
     )
+    _ensure_column(conn, "detector_model_id", "TEXT")
+    _ensure_column(conn, "classifier_model_id", "TEXT")
+
+
+def _ensure_column(conn: sqlite3.Connection, column: str, coltype: str) -> None:
+    cur = conn.execute("PRAGMA table_info(images);")
+    cols = {row[1] for row in cur.fetchall()}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE images ADD COLUMN {column} {coltype};")
+        conn.commit()
 
 
 def insert_image(conn: sqlite3.Connection, row: Dict[str, Any]) -> None:
@@ -71,8 +83,10 @@ def insert_image(conn: sqlite3.Connection, row: Dict[str, Any]) -> None:
             top1_class_name,
             top1_confidence,
             coco_json,
-            downloaded_timestamp
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            downloaded_timestamp,
+            detector_model_id,
+            classifier_model_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """,
         (
             row.get("timestamp"),
@@ -85,6 +99,8 @@ def insert_image(conn: sqlite3.Connection, row: Dict[str, Any]) -> None:
             row.get("top1_confidence"),
             row.get("coco_json"),
             row.get("downloaded_timestamp", ""),
+            row.get("detector_model_id", ""),
+            row.get("classifier_model_id", ""),
         ),
     )
     conn.commit()
@@ -103,7 +119,9 @@ def fetch_all_images(conn: sqlite3.Connection) -> List[sqlite3.Row]:
             top1_class_name,
             top1_confidence,
             coco_json,
-            downloaded_timestamp
+            downloaded_timestamp,
+            detector_model_id,
+            classifier_model_id
         FROM images
         ORDER BY timestamp DESC;
         """
@@ -122,7 +140,9 @@ def fetch_image_summaries(conn: sqlite3.Connection) -> List[sqlite3.Row]:
             best_class_conf,
             top1_class_name,
             top1_confidence,
-            downloaded_timestamp
+            downloaded_timestamp,
+            detector_model_id,
+            classifier_model_id
         FROM images
         ORDER BY timestamp DESC;
         """
@@ -145,7 +165,9 @@ def fetch_images_by_date(conn: sqlite3.Connection, date_str_iso: str) -> List[sq
             top1_class_name,
             top1_confidence,
             coco_json,
-            downloaded_timestamp
+            downloaded_timestamp,
+            detector_model_id,
+            classifier_model_id
         FROM images
         WHERE timestamp LIKE ? || '%'
         ORDER BY timestamp DESC;
@@ -170,7 +192,9 @@ def fetch_day_images(conn: sqlite3.Connection, date_str_iso: str) -> List[sqlite
             top1_class_name,
             top1_confidence,
             coco_json,
-            downloaded_timestamp
+            downloaded_timestamp,
+            detector_model_id,
+            classifier_model_id
         FROM images
         WHERE timestamp LIKE ? || '%'
         ORDER BY timestamp DESC;
