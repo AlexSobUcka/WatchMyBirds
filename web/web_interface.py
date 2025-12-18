@@ -354,6 +354,69 @@ def create_web_interface(detection_manager):
         """Derives the zoomed image filename from the optimized filename."""
         return optimized_filename.replace(optimized_suffix, zoomed_suffix)
 
+    def build_edit_tiles(date_str_iso: str, df_input: pd.DataFrame):
+        """Builds edit tiles for a given date and dataframe."""
+        tiles = []
+        for _, row in df_input.iterrows():
+            relative_path = os.path.join(
+                date_str_iso.replace("-", ""), row["optimized_name"]
+            )
+            checklist_value = relative_path
+
+            info_box = create_thumbnail_info_box(
+                row.get("best_class", ""),
+                row.get("best_class_conf", ""),
+                row.get("top1_class_name", ""),
+                row.get("top1_confidence", ""),
+            )
+            downloaded_ts = row.get("downloaded_timestamp", "")
+            if downloaded_ts and str(downloaded_ts).strip():
+                info_box.children.append(
+                    html.Span(
+                        "Downloaded",
+                        className="info-download-status text-success small",
+                    )
+                )
+
+            zoomed_filename = derive_zoomed_filename(relative_path)
+
+            checkbox_component = dbc.Checkbox(
+                id={"type": "edit-image-checkbox", "index": checklist_value},
+                value=False,
+                className="edit-checkbox",
+            )
+
+            tile_classname = "gallery-tile edit-tile"
+            if downloaded_ts and str(downloaded_ts).strip():
+                tile_classname += " downloaded-image"
+
+            tiles.append(
+                html.Div(
+                    [
+                        html.Div(
+                            checkbox_component,
+                            className="edit-checkbox-wrapper",
+                        ),
+                        html.Button(
+                            [
+                                html.Img(
+                                    src=f"/images/{zoomed_filename}",
+                                    alt=f"Thumbnail {row['optimized_name']}",
+                                    className="thumbnail-image",
+                                    style={"width": f"{IMAGE_WIDTH}px"},
+                                )
+                            ],
+                            id={"type": "edit-image-toggle", "index": checklist_value},
+                            n_clicks=0,
+                            className="edit-thumb-button",
+                        ),
+                        info_box,
+                    ],
+                    className=tile_classname,
+                )
+            )
+        return tiles
+
     def create_thumbnail_button(image_filename: str, index: int, id_type: str):
         """Creates a clickable thumbnail button with standard styling."""
         zoomed_filename = derive_zoomed_filename(image_filename)
@@ -1241,61 +1304,7 @@ def create_web_interface(detection_manager):
                 fluid=True,
             )
 
-        image_tiles = []
-
-        # Generate image tiles with checkboxes
-        for df_index, row in df.iterrows():  # No need for enumerate index anymore
-            relative_path = os.path.join(
-                date_str_iso.replace("-", ""), row["optimized_name"]
-            )
-            checklist_value = (
-                relative_path  # Use relative path as the unique identifier
-            )
-
-            info_box = create_thumbnail_info_box(
-                row.get("best_class", ""),
-                row.get("best_class_conf", ""),
-                row.get("top1_class_name", ""),
-                row.get("top1_confidence", ""),
-            )
-            downloaded_ts = row.get("downloaded_timestamp", "")
-            if downloaded_ts and str(downloaded_ts).strip():
-                info_box.children.append(
-                    html.Span(
-                        f"Downloaded",
-                        className="info-download-status text-success small",
-                    )
-                )
-
-            zoomed_filename = derive_zoomed_filename(relative_path)
-
-            # --- Simplified Checkbox Placement ---
-            checkbox_component = dbc.Checkbox(
-                id={"type": "edit-image-checkbox", "index": checklist_value},
-                value=False,
-                className="edit-checkbox",
-            )
-
-            # Determine ClassName for the Tile ---
-            tile_classname = "gallery-tile edit-tile"  # Base classes
-            if downloaded_ts and str(downloaded_ts).strip():
-                tile_classname += " downloaded-image"  # Add class if downloaded
-
-            image_tile = html.Div(
-                [
-                    checkbox_component,
-                    html.Img(
-                        src=f"/images/{zoomed_filename}",
-                        alt=f"Thumbnail {row['optimized_name']}",
-                        className="thumbnail-image",
-                        style={"width": f"{IMAGE_WIDTH}px", "cursor": "pointer"},
-                    ),
-                    info_box,
-                ],
-                className=tile_classname,
-            )  # Use the determined classname
-
-            image_tiles.append(image_tile)
+        image_tiles = build_edit_tiles(date_str_iso, df)
 
         return dbc.Container(
             [
@@ -1322,33 +1331,137 @@ def create_web_interface(detection_manager):
                     ],
                     className="mb-3",
                 ),
-                # Action Buttons, Confirmation, Store, Download
                 dbc.Row(
                     [
                         dbc.Col(
                             dbc.Button(
-                                "Delete Selected Images",
-                                id="delete-button",
-                                color="danger",
+                                "Select all on this page",
+                                id="select-all-button",
+                                color="primary",
+                                outline=True,
                                 className="me-2",
+                                n_clicks=0,
                             ),
                             width="auto",
                         ),
                         dbc.Col(
                             dbc.Button(
-                                "Download Selected Images",
-                                id="download-button",
-                                color="success",
+                                "Clear selection",
+                                id="clear-selection-button",
+                                color="secondary",
+                                outline=True,
+                                className="me-2",
+                                n_clicks=0,
                             ),
+                            width="auto",
+                        ),
+                        dbc.Col(
+                            html.Div("Selected: 0", id="selected-count"),
+                            width="auto",
+                            className="align-self-center",
+                        ),
+                    ],
+                    className="mb-3 align-items-center",
+                ),
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            [
+                                html.Label("Filter by download status", className="fw-semibold"),
+                                dcc.Dropdown(
+                                    id="edit-filter-status",
+                                    options=[
+                                        {"label": "All", "value": "all"},
+                                        {"label": "Downloaded only", "value": "downloaded"},
+                                        {"label": "Not downloaded", "value": "not_downloaded"},
+                                    ],
+                                    value="all",
+                                    clearable=False,
+                                    style={"minWidth": "220px"},
+                                ),
+                            ],
+                            width="auto",
+                            className="me-3",
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label("Sort", className="fw-semibold"),
+                                dcc.Dropdown(
+                                    id="edit-sort",
+                                    options=[
+                                        {"label": "Newest first", "value": "time_desc"},
+                                        {"label": "Oldest first", "value": "time_asc"},
+                                        {"label": "Species (A→Z)", "value": "species"},
+                                    ],
+                                    value="time_desc",
+                                    clearable=False,
+                                    style={"minWidth": "180px"},
+                                ),
+                            ],
+                            width="auto",
+                        ),
+                    ],
+                    className="mb-3 align-items-center",
+                ),
+                # Action Buttons, Confirmation, Store, Download
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            [
+                                html.H5("Delete"),
+                                html.P(
+                                    "Removes selected images and their DB rows. This cannot be undone.",
+                                    className="text-muted small",
+                                ),
+                                dbc.Button(
+                                    "Delete Selected Images",
+                                    id="delete-button",
+                                    color="danger",
+                                    className="me-2",
+                                ),
+                            ],
+                            width="auto",
+                        ),
+                        dbc.Col(
+                            [
+                                html.H5("Download"),
+                                html.P(
+                                    "Download originals for selected images.",
+                                    className="text-muted small",
+                                ),
+                                dbc.Button(
+                                    "Download Selected Images",
+                                    id="download-button",
+                                    color="success",
+                                ),
+                            ],
+                            width="auto",
+                        ),
+                        dbc.Col(
+                            [
+                                html.Div(
+                                    [
+                                        html.Span("Selected: ", className="fw-semibold me-1"),
+                                        html.Span("0", id="selected-summary-count"),
+                                        html.Span(" | ", className="mx-1"),
+                                        html.Span("None", id="selected-summary-list"),
+                                    ],
+                                    className="text-muted small",
+                                )
+                            ],
                             width="auto",
                         ),
                     ],
                     justify="start",
                     className="mb-3",
                 ),
+                html.Div(
+                    f"Page 1 (static edit view for {date_str_iso})",
+                    className="text-muted small mb-2",
+                ),
                 dcc.ConfirmDialog(
                     id="confirm-delete",
-                    message=f"Are you sure you want to permanently delete the selected images and their CSV entries for {date_str_iso}? This cannot be undone.",
+                    message="Are you sure you want to permanently delete the selected images? This cannot be undone.",
                 ),
                 dcc.Store(
                     id="selected-images-store", data=[]
@@ -1374,11 +1487,27 @@ def create_web_interface(detection_manager):
                             width="auto",
                         ),
                         dbc.Col(
-                            dbc.Button(
-                                "Download Selected Images",
-                                id="download-button-bottom",
-                                color="success",
-                            ),
+                            [
+                                dbc.Button(
+                                    "Download Selected Images",
+                                    id="download-button-bottom",
+                                    color="success",
+                                ),
+                            ],
+                            width="auto",
+                        ),
+                        dbc.Col(
+                            [
+                                html.Div(
+                                    [
+                                        html.Span("Selected: ", className="fw-semibold me-1"),
+                                        html.Span("0", id="selected-summary-count-bottom"),
+                                        html.Span(" | ", className="mx-1"),
+                                        html.Span("None", id="selected-summary-list-bottom"),
+                                    ],
+                                    className="text-muted small",
+                                )
+                            ],
                             width="auto",
                         ),
                     ],
@@ -2933,45 +3062,151 @@ def create_web_interface(detection_manager):
         )
 
     @app.callback(
+        Output({"type": "edit-image-checkbox", "index": ALL}, "value"),
+        Input("select-all-button", "n_clicks"),
+        Input("clear-selection-button", "n_clicks"),
+        State({"type": "edit-image-checkbox", "index": ALL}, "value"),
+        prevent_initial_call=True,
+    )
+    def bulk_select_clear(select_all_clicks, clear_clicks, current_values):
+        current_values = current_values or []
+        ctx = callback_context
+        if not ctx.triggered or not current_values:
+            raise PreventUpdate
+        trigger_id = ctx.triggered_id
+        if trigger_id == "select-all-button":
+            return [True for _ in current_values]
+        if trigger_id == "clear-selection-button":
+            return [False for _ in current_values]
+        raise PreventUpdate
+
+    @app.callback(
         Output("selected-images-store", "data"),
-        Input(
-            {"type": "edit-image-checkbox", "index": ALL}, "value"
-        ),  # Triggered by checkbox value changes
+        Output("selected-count", "children"),
+        Output("selected-summary-count", "children"),
+        Output("selected-summary-list", "children"),
+        Output("selected-summary-count-bottom", "children"),
+        Output("selected-summary-list-bottom", "children"),
+        Input({"type": "edit-image-checkbox", "index": ALL}, "value"),
         State({"type": "edit-image-checkbox", "index": ALL}, "id"),
         prevent_initial_call=True,
     )
     def update_selected_images(checkbox_values, checkbox_ids):
-        # This callback runs whenever a checkbox's value changes (natively or via JS .click())
-        # print("update_selected_images triggered by checkbox value change")
         selected_paths = []
         if not checkbox_ids:
-            return []
-        # checkbox_values and checkbox_ids should correspond index-wise
+            return (
+                [],
+                "Selected: 0",
+                "0",
+                "None",
+                "0",
+                "None",
+            )
         for i, cb_id in enumerate(checkbox_ids):
             is_checked = checkbox_values[i] if i < len(checkbox_values) else False
             if is_checked:
-                relative_path = cb_id["index"]  # Get the path from the ID
+                relative_path = cb_id["index"]
                 selected_paths.append(relative_path)
-        # print(f"Updating selected-images-store with: {selected_paths}")
-        return selected_paths
+        count_text = f"Selected: {len(selected_paths)}"
+        short_list = (
+            ", ".join([os.path.basename(p) for p in selected_paths[:3]])
+            if selected_paths
+            else "None"
+        )
+        if len(selected_paths) > 3:
+            short_list += ", …"
+        return (
+            selected_paths,
+            count_text,
+            str(len(selected_paths)),
+            short_list,
+            str(len(selected_paths)),
+            short_list,
+        )
 
-    # Callback to trigger delete confirmation
     @app.callback(
-        Output("confirm-delete", "displayed"),
-        Input("delete-button", "n_clicks"),
-        Input("delete-button-bottom", "n_clicks"),  # Trigger from bottom button too
+        Output("edit-gallery-grid", "children", allow_duplicate=True),
+        Output("selected-images-store", "data", allow_duplicate=True),
+        Output("selected-count", "children", allow_duplicate=True),
+        Output("selected-summary-count", "children", allow_duplicate=True),
+        Output("selected-summary-list", "children", allow_duplicate=True),
+        Output("selected-summary-count-bottom", "children", allow_duplicate=True),
+        Output("selected-summary-list-bottom", "children", allow_duplicate=True),
+        Input("edit-filter-status", "value"),
+        Input("edit-sort", "value"),
+        State("url", "pathname"),
         prevent_initial_call=True,
     )
-    def display_delete_confirm(n_clicks_top, n_clicks_bottom):
-        if (n_clicks_top and n_clicks_top > 0) or (
+    def apply_edit_filters(filter_status, sort_value, pathname):
+        match = re.search(r"/edit/(\d{4}-\d{2}-\d{2})", pathname or "")
+        if not match:
+            raise PreventUpdate
+        date_str_iso = match.group(1)
+        df = read_csv_for_date(date_str_iso)
+        if df.empty:
+            return (
+                [],
+                [],
+                "Selected: 0",
+                "0",
+                "None",
+                "0",
+                "None",
+            )
+        # Filter
+        if filter_status == "downloaded":
+            df = df[df["downloaded_timestamp"].astype(str).str.strip() != ""]
+        elif filter_status == "not_downloaded":
+            df = df[df["downloaded_timestamp"].astype(str).str.strip() == ""]
+        # Sort
+        if sort_value == "time_asc":
+            df = df.sort_values(by="timestamp", ascending=True)
+        elif sort_value == "time_desc":
+            df = df.sort_values(by="timestamp", ascending=False)
+        elif sort_value == "species":
+            df = df.sort_values(
+                by=["best_class", "top1_class_name", "timestamp"], ascending=[True, True, False]
+            )
+        tiles = build_edit_tiles(date_str_iso, df)
+        return tiles, [], "Selected: 0", "0", "None", "0", "None"
+
+    # Callback to trigger delete confirmation with preview
+    @app.callback(
+        Output("confirm-delete", "displayed"),
+        Output("confirm-delete", "message"),
+        Input("delete-button", "n_clicks"),
+        Input("delete-button-bottom", "n_clicks"),  # Trigger from bottom button too
+        State("selected-images-store", "data"),
+        prevent_initial_call=True,
+    )
+    def display_delete_confirm(n_clicks_top, n_clicks_bottom, selected_images):
+        triggered = (n_clicks_top and n_clicks_top > 0) or (
             n_clicks_bottom and n_clicks_bottom > 0
-        ):
-            return True
-        return False
+        )
+        if not triggered:
+            raise PreventUpdate
+        count = len(selected_images or [])
+        if count == 0:
+            return False, "No images selected."
+        preview = ", ".join([os.path.basename(p) for p in (selected_images or [])][:5])
+        if count > 5:
+            preview += ", …"
+        msg = (
+            f"Delete {count} image(s)? This permanently removes files and database rows. "
+            f"Selection: {preview}"
+        )
+        return True, msg
 
     # Callback to handle deletion after confirmation
     @app.callback(
-        Output("edit-status-message", "children"),
+        Output("edit-status-message", "children", allow_duplicate=True),
+        Output("edit-gallery-grid", "children", allow_duplicate=True),
+        Output("selected-images-store", "data", allow_duplicate=True),
+        Output("selected-count", "children", allow_duplicate=True),
+        Output("selected-summary-count", "children", allow_duplicate=True),
+        Output("selected-summary-list", "children", allow_duplicate=True),
+        Output("selected-summary-count-bottom", "children", allow_duplicate=True),
+        Output("selected-summary-list-bottom", "children", allow_duplicate=True),
         Input("confirm-delete", "submit_n_clicks"),
         State("selected-images-store", "data"),
         State("url", "pathname"),  # Get the date from the current URL
@@ -2985,6 +3220,12 @@ def create_web_interface(detection_manager):
             return (
                 dbc.Alert("No images selected for deletion.", color="warning"),
                 no_update,
+                [],
+                "Selected: 0",
+                "0",
+                "None",
+                "0",
+                "None",
             )  # Or just no_update
 
         # Extract date from pathname like /edit/YYYY-MM-DD
@@ -3004,6 +3245,12 @@ def create_web_interface(detection_manager):
                     color="danger",
                 ),
                 no_update,
+                [],
+                "Selected: 0",
+                "0",
+                "None",
+                "0",
+                "None",
             )
 
         selected_filenames = {os.path.basename(p) for p in selected_images}
@@ -3046,10 +3293,23 @@ def create_web_interface(detection_manager):
             else ("warning" if success_delete else "danger")
         )
 
-        return dbc.Alert(
-            html.Ul([html.Li(msg) for msg in status_messages]),
-            color=alert_color,
-            dismissable=True,
+        # Rebuild gallery after deletion to reflect current state
+        refreshed_df = read_csv_for_date(date_str_iso)
+        refreshed_tiles = build_edit_tiles(date_str_iso, refreshed_df) if not refreshed_df.empty else []
+
+        return (
+            dbc.Alert(
+                html.Ul([html.Li(msg) for msg in status_messages]),
+                color=alert_color,
+                dismissable=True,
+            ),
+            refreshed_tiles,
+            [],
+            "Selected: 0",
+            "0",
+            "None",
+            "0",
+            "None",
         )
 
     # Callback to handle download request
@@ -3369,6 +3629,6 @@ def create_web_interface(detection_manager):
     # -----------------------------
     def run(debug=False, host="0.0.0.0", port=8050):
         logger.info(f"Starting Dash server on http://{host}:{port}")
-        app.run_server(host=host, port=port, debug=debug)
+        app.run(host=host, port=port, debug=debug)
 
     return {"app": app, "server": server, "run": run}
