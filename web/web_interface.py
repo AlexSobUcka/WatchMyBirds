@@ -2489,6 +2489,19 @@ def create_web_interface(detection_manager):
         return generate_gallery()
 
     # --- App Layout Modification ---
+    initial_page_content = dbc.Container(
+        [
+            generate_navbar(),
+            dcc.Loading(
+                type="circle",
+                children=html.Div(
+                    html.P("Loading...", className="text-center my-5"),
+                    className="d-flex justify-content-center",
+                ),
+            ),
+        ],
+        fluid=True,
+    )
     app.layout = html.Div(
         [
             dcc.Location(id="url", refresh=False),
@@ -2500,7 +2513,7 @@ def create_web_interface(detection_manager):
             dcc.Store(
                 id="edit-target-date-store", storage_type="memory"
             ),  # Temp store for target date
-            html.Div(id="page-content"),  # Main page content
+            html.Div(id="page-content", children=initial_page_content),  # Main page content with initial shell
             html.Div(id="modal-container"),  # Container for the password modal
             # Other stores/hidden divs if needed
             dcc.Store(id="scroll-trigger-store", data=None),
