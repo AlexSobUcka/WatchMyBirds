@@ -1399,6 +1399,51 @@ def create_web_interface(detection_manager):
                                 ),
                             ],
                             width="auto",
+                            className="me-3",
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label("Detector min conf", className="fw-semibold"),
+                                dbc.Input(
+                                    id="edit-filter-detector-min",
+                                    type="number",
+                                    min=0,
+                                    max=1,
+                                    step=0.05,
+                                    value=0,
+                                    style={"maxWidth": "120px"},
+                                ),
+                            ],
+                            width="auto",
+                            className="me-3",
+                        ),
+                        dbc.Col(
+                            [
+                                html.Label("Classifier max conf", className="fw-semibold"),
+                                dbc.Input(
+                                    id="edit-filter-classifier-min",
+                                    type="number",
+                                    min=0,
+                                    max=1,
+                                    step=0.05,
+                                    value=0,
+                                    style={"maxWidth": "140px"},
+                                ),
+                            ],
+                            width="auto",
+                            className="me-3",
+                        ),
+                        dbc.Col(
+                            dbc.Button(
+                                "Apply filter",
+                                id="edit-filter-apply",
+                                color="secondary",
+                                outline=True,
+                                className="mt-4",
+                                n_clicks=0,
+                            ),
+                            width="auto",
+                            className="align-self-end",
                         ),
                     ],
                     className="mb-3 align-items-center",
@@ -3075,25 +3120,6 @@ def create_web_interface(detection_manager):
         )
 
     @app.callback(
-        Output({"type": "edit-image-checkbox", "index": ALL}, "value"),
-        Input("select-all-button", "n_clicks"),
-        Input("clear-selection-button", "n_clicks"),
-        State({"type": "edit-image-checkbox", "index": ALL}, "value"),
-        prevent_initial_call=True,
-    )
-    def bulk_select_clear(select_all_clicks, clear_clicks, current_values):
-        current_values = current_values or []
-        ctx = callback_context
-        if not ctx.triggered or not current_values:
-            raise PreventUpdate
-        trigger_id = ctx.triggered_id
-        if trigger_id == "select-all-button":
-            return [True for _ in current_values]
-        if trigger_id == "clear-selection-button":
-            return [False for _ in current_values]
-        raise PreventUpdate
-
-    @app.callback(
         Output("selected-images-store", "data"),
         Output("selected-count", "children"),
         Output("selected-summary-count", "children"),
@@ -3145,12 +3171,15 @@ def create_web_interface(detection_manager):
         Output("selected-summary-list", "children", allow_duplicate=True),
         Output("selected-summary-count-bottom", "children", allow_duplicate=True),
         Output("selected-summary-list-bottom", "children", allow_duplicate=True),
-        Input("edit-filter-status", "value"),
-        Input("edit-sort", "value"),
+        Input("edit-filter-apply", "n_clicks"),
+        State("edit-filter-status", "value"),
+        State("edit-sort", "value"),
+        State("edit-filter-detector-min", "value"),
+        State("edit-filter-classifier-min", "value"),
         State("url", "pathname"),
         prevent_initial_call=True,
     )
-    def apply_edit_filters(filter_status, sort_value, pathname):
+    def apply_edit_filters(n_clicks, filter_status, sort_value, det_min, cls_min, pathname):
         match = re.search(r"/edit/(\d{4}-\d{2}-\d{2})", pathname or "")
         if not match:
             raise PreventUpdate
@@ -3171,6 +3200,17 @@ def create_web_interface(detection_manager):
             df = df[df["downloaded_timestamp"].astype(str).str.strip() != ""]
         elif filter_status == "not_downloaded":
             df = df[df["downloaded_timestamp"].astype(str).str.strip() == ""]
+        # Threshold filters
+        try:
+            if det_min is not None:
+                df = df[pd.to_numeric(df["best_class_conf"], errors="coerce") >= float(det_min)]
+        except Exception:
+            pass
+        try:
+            if cls_min is not None:
+                df = df[pd.to_numeric(df["top1_confidence"], errors="coerce") >= float(cls_min)]
+        except Exception:
+            pass
         # Sort
         if sort_value == "time_asc":
             df = df.sort_values(by="timestamp", ascending=True)
@@ -3182,6 +3222,27 @@ def create_web_interface(detection_manager):
             )
         tiles = build_edit_tiles(date_str_iso, df)
         return tiles, [], "Selected: 0", "0", "None", "0", "None"
+
+    @app.callback(
+        Output({"type": "edit-image-checkbox", "index": ALL}, "value"),
+        Input("select-all-button", "n_clicks"),
+        Input("clear-selection-button", "n_clicks"),
+        Input("edit-filter-apply", "n_clicks"),
+        State({"type": "edit-image-checkbox", "index": ALL}, "value"),
+        prevent_initial_call=True,
+    )
+    def bulk_select_clear(select_all_clicks, clear_clicks, filter_clicks, current_values):
+        current_values = current_values or []
+        ctx = callback_context
+        if not ctx.triggered or not current_values:
+            raise PreventUpdate
+        trigger_id = ctx.triggered_id
+        if trigger_id == "select-all-button":
+            return [True for _ in current_values]
+        if trigger_id == "clear-selection-button":
+            return [False for _ in current_values]
+        # filter apply should not change selection
+        raise PreventUpdate
 
     # Callback to trigger delete confirmation with preview
     @app.callback(
