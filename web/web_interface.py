@@ -44,6 +44,8 @@ from utils.db import (
     fetch_image_summaries,
     fetch_day_images,
     fetch_hourly_counts,
+    fetch_day_count,
+    fetch_daily_species_summary,
 )
 
 config = get_config()
@@ -60,6 +62,10 @@ import pandas as pd
 _CACHE_TIMEOUT = 60  # Set cache timeout in seconds
 _cached_images = {"images": None, "timestamp": 0}
 _species_summary_cache = {"payload": None, "timestamp": 0}
+_daily_species_summary_cache = {}
+_DAILY_SPECIES_CACHE_TTL = 300  # seconds
+_daily_gallery_summary_cache = {}
+_DAILY_GALLERY_SUMMARY_TTL = 300  # seconds
 
 
 def create_web_interface(detection_manager):
@@ -255,6 +261,90 @@ def create_web_interface(detection_manager):
                     (filename, best_class, best_class_conf, top1_class, top1_conf)
                 )
         return images_by_date
+
+    def get_daily_species_summary(date_iso: str):
+        """Returns cached per-species counts for a given date (YYYY-MM-DD)."""
+        now = time.time()
+        cached = _daily_species_summary_cache.get(date_iso)
+        if cached and (now - cached["timestamp"]) < _DAILY_SPECIES_CACHE_TTL:
+            return cached["data"]
+        try:
+            rows = fetch_daily_species_summary(db_conn, date_iso)
+        except Exception as e:
+            logger.error(f"Error fetching daily species summary for {date_iso}: {e}")
+            rows = []
+
+        summary = []
+        for row in rows:
+            species = row["species"]
+            count = row["count"]
+            if not species:
+                continue
+            common_name = COMMON_NAMES.get(species, species.replace("_", " "))
+            summary.append(
+                {"species": species, "common_name": common_name, "count": int(count)}
+            )
+        _daily_species_summary_cache[date_iso] = {"data": summary, "timestamp": now}
+        return summary
+
+    def get_gallery_daily_summary(date_iso: str):
+        """Returns cached gallery-style daily summary content for landing."""
+        now = time.time()
+        cached = _daily_gallery_summary_cache.get(date_iso)
+        if cached and (now - cached["timestamp"]) < _DAILY_GALLERY_SUMMARY_TTL:
+            return cached["content"]
+
+        try:
+            rows = fetch_day_images(db_conn, date_iso)
+        except Exception as e:
+            logger.error(f"Error fetching day images for daily summary {date_iso}: {e}")
+            rows = []
+
+        images_for_this_date = []
+        for row in rows:
+            optimized_name = row["optimized_name"]
+            if not optimized_name:
+                continue
+            rel_path = os.path.join(date_iso.replace("-", ""), optimized_name)
+            images_for_this_date.append(
+                (
+                    rel_path,
+                    row["best_class"],
+                    row["best_class_conf"],
+                    row["top1_class_name"],
+                    row["top1_confidence"],
+                )
+            )
+
+        if not images_for_this_date:
+            content = html.P(
+                f"No detections found for {date_iso}.",
+                className="text-center text-muted",
+            )
+        else:
+            agreement_summary_content = generate_daily_fused_summary_agreement(
+                date_iso, images_for_this_date
+            )
+            weighted_summary_content = generate_daily_fused_summary_weighted(
+                date_iso, images_for_this_date
+            )
+            content = html.Div(
+                [
+                    html.H4(
+                        "Daily Summary: Agreement & Product Score",
+                        className="text-center mt-4",
+                    ),
+                    agreement_summary_content,
+                    html.H4(
+                        f"Daily Summary: Weighted Score, α={FUSION_ALPHA}",
+                        className="text-center mt-4",
+                    ),
+                    weighted_summary_content,
+                ]
+            )
+
+        _daily_gallery_summary_cache[date_iso] = {"content": content, "timestamp": now}
+        return content
 
     def derive_zoomed_filename(
         optimized_filename: str,
@@ -1302,6 +1392,7 @@ def create_web_interface(detection_manager):
 
     def generate_navbar():
         """Creates the navbar with the logo for gallery pages."""
+        today_date_iso = datetime.now().strftime("%Y-%m-%d")
         return dbc.NavbarSimple(
             brand=html.Img(
                 src="/assets/WatchMyBirds.png",
@@ -1312,6 +1403,9 @@ def create_web_interface(detection_manager):
                 dbc.NavItem(dbc.NavLink("Live Stream", href="/", className="mx-auto")),
                 dbc.NavItem(
                     dbc.NavLink("Gallery", href="/gallery", className="mx-auto")
+                ),
+                dbc.NavItem(
+                    dbc.NavLink("Today", href=f"/gallery/{today_date_iso}", className="mx-auto")
                 ),
                 dbc.NavItem(
                     dbc.NavLink("Species Summary", href="/species", className="mx-auto")
@@ -1389,15 +1483,15 @@ def create_web_interface(detection_manager):
             optimized_name = row["optimized_name"]
             if not optimized_name:
                 continue
-            images_for_summary.append(
-                (
-                    os.path.join(date.replace("-", ""), optimized_name),
-                    row["best_class"],
-                    row["best_class_conf"],
-                    row["top1_class_name"],
-                    row["top1_confidence"],
-                )
+            rel_path = os.path.join(date.replace("-", ""), optimized_name)
+            item = (
+                rel_path,
+                row["best_class"],
+                row["best_class_conf"],
+                row["top1_class_name"],
+                row["top1_confidence"],
             )
+            images_for_summary.append(item)
 
         if (
             df.empty and not images_for_summary
@@ -1419,7 +1513,7 @@ def create_web_interface(detection_manager):
             )
 
         images_for_this_date = images_for_summary
-        total_images = len(images_for_this_date)
+        total_images = fetch_day_count(db_conn, date)
         total_pages = math.ceil(total_images / PAGE_SIZE) or 1
         page = max(1, min(page, total_pages))
         start_index = (page - 1) * PAGE_SIZE
@@ -1694,7 +1788,7 @@ def create_web_interface(detection_manager):
             frame_with_timestamp = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
 
             ret, buffer = cv2.imencode(
-                ".jpg", frame_with_timestamp, [int(cv2.IMWRITE_JPEG_QUALITY), 80]
+                ".jpg", frame_with_timestamp, [int(cv2.IMWRITE_JPEG_QUALITY), 70]
             )
             if ret:
                 yield (
@@ -1816,6 +1910,17 @@ def create_web_interface(detection_manager):
                 return "Image not found", 404
             return send_from_directory(output_dir, filename)
 
+        def daily_species_summary_route():
+            date_iso = request.args.get("date")
+            if not date_iso:
+                date_iso = datetime.now().strftime("%Y-%m-%d")
+            try:
+                datetime.strptime(date_iso, "%Y-%m-%d")
+            except ValueError:
+                return jsonify({"error": "Invalid date format, expected YYYY-MM-DD"}), 400
+            summary = get_daily_species_summary(date_iso)
+            return jsonify({"date": date_iso, "summary": summary})
+
         app_server.route("/images/<path:filename>")(serve_image)
         def video_feed_route():
             return Response(
@@ -1856,6 +1961,12 @@ def create_web_interface(detection_manager):
         )
         app_server.add_url_rule(
             "/stream_status", endpoint="stream_status", view_func=stream_status_route
+        )
+        app_server.add_url_rule(
+            "/api/daily_species_summary",
+            endpoint="daily_species_summary",
+            view_func=daily_species_summary_route,
+            methods=["GET"],
         )
         app_server.add_url_rule(
             "/api/settings", endpoint="settings_get", view_func=settings_get_route, methods=["GET"]
@@ -1905,30 +2016,51 @@ def create_web_interface(detection_manager):
 
     def stream_layout():
         """Layout for the live stream page using CSS classes."""
-        # --- Get data needed for the new daily summaries ---
+        # --- Optional lightweight stats for today ---
         today_date_iso = datetime.now().strftime("%Y-%m-%d")
-        images_by_date = get_captured_images_by_date()
-        images_for_today = images_by_date.get(today_date_iso, [])
-
-        # --- Generate Content ---
-        agreement_content = generate_daily_fused_summary_agreement(
-            today_date_iso, images_for_today
-        )
-        weighted_content = generate_daily_fused_summary_weighted(
-            today_date_iso, images_for_today
-        )
-
-        # Generate today's paginated gallery content
-        todays_paginated_gallery_content = generate_subgallery(
-            today_date_iso, page=1, include_header=False
-        )
+        today_count = fetch_day_count(db_conn, today_date_iso)
+        hourly_chart = generate_hourly_detection_plot()
+        latest_strip = []
+        try:
+            rows = fetch_day_images(db_conn, today_date_iso)
+            for row in rows:
+                optimized_name = row["optimized_name"]
+                if not optimized_name:
+                    continue
+                rel_path = os.path.join(today_date_iso.replace("-", ""), optimized_name)
+                latest_strip.append(
+                    (
+                        rel_path,
+                        row["best_class"],
+                        row["best_class_conf"],
+                        row["top1_class_name"],
+                        row["top1_confidence"],
+                    )
+                )
+                if len(latest_strip) >= 5:
+                    break
+        except Exception as e:
+            logger.error(f"Error building latest strip for today: {e}")
+        latest_strip_modals = [
+            create_image_modal_layout(rel_path, i, "latest-strip")
+            for i, (
+                rel_path,
+                best_class,
+                best_class_conf,
+                top1_class,
+                top1_conf,
+            ) in enumerate(latest_strip)
+        ]
 
         # --- Build the Layout List ---
         layout_children = [
             generate_navbar(),
             dbc.Row(
                 dbc.Col(
-                    html.H1("Live Stream", className="text-center"),
+                    html.H1(
+                        f"Live Stream (Today's Detections: {today_count})",
+                        className="text-center",
+                    ),
                     width=12,
                     className="my-3",
                 )
@@ -1949,50 +2081,120 @@ def create_web_interface(detection_manager):
                 className="my-3",
             ),
             dbc.Row(
-                dbc.Col(
-                    html.H2(
-                        "Daily Summary: Agreement & Product Score",
-                        className="text-center",
-                    ),
-                    width=12,
-                    className="mt-4",
-                )
+                [
+                    dbc.Col(
+                        html.Div(
+                            [
+                                html.H4(
+                                                "Latest Detections (Top 5)",
+                                                className="text-center mt-4",
+                                            ),
+                                            html.Div(
+                                                [
+                                                    html.Div(
+                                            [
+                                                create_thumbnail_button(
+                                                    rel_path, i, "latest-strip-thumbnail"
+                                                ),
+                                                create_thumbnail_info_box(
+                                                    best_class,
+                                                    best_class_conf,
+                                                    top1_class,
+                                                    top1_conf,
+                                                ),
+                                            ],
+                                            className="gallery-tile",
+                                        )
+                                        for i, (
+                                            rel_path,
+                                            best_class,
+                                            best_class_conf,
+                                            top1_class,
+                                            top1_conf,
+                                        ) in enumerate(latest_strip)
+                                    ],
+                                    className="gallery-grid-container",
+                                )
+                                if latest_strip
+                                else html.P(
+                                    "No detections yet today.",
+                                    className="text-center text-muted",
+                                ),
+                            ]
+                        ),
+                        width=12,
+                    )
+                ],
+                className="my-3",
             ),
             dbc.Row(
                 dbc.Col(
-                    dcc.Loading(type="circle", children=agreement_content), width=12
+                    [
+                        html.H4(
+                            "Today's Daily Summary (Gallery style)",
+                            className="text-center mt-4",
+                        ),
+                        dcc.Loading(
+                            type="circle",
+                            children=html.Div(
+                                html.P(
+                                    "Loading daily summary...",
+                                    className="text-center text-muted",
+                                ),
+                                id="today-daily-summary",
+                            ),
+                        ),
+                        dcc.Interval(
+                            id="today-daily-summary-trigger",
+                            interval=700,
+                            n_intervals=0,
+                            max_intervals=1,
+                        ),
+                    ],
+                    width=12,
                 ),
-                className="mb-3",
+                className="my-3",
             ),
             dbc.Row(
                 dbc.Col(
-                    html.H2(
-                        f"Daily Summary: Weighted Score, α={FUSION_ALPHA}",
-                        className="text-center",
-                    ),
+                    [
+                        html.H4(
+                            "Today's Species Summary",
+                            className="text-center mt-4",
+                        ),
+                        dcc.Loading(
+                            type="circle",
+                            children=html.Div(
+                                html.P(
+                                    "Loading species summary...",
+                                    className="text-center text-muted",
+                                ),
+                                id="today-species-summary",
+                            ),
+                        ),
+                        dcc.Interval(
+                            id="today-species-summary-trigger",
+                            interval=500,
+                            n_intervals=0,
+                            max_intervals=1,
+                        ),
+                    ],
                     width=12,
-                    className="mt-4",
-                )
-            ),
-            dbc.Row(
-                dbc.Col(
-                    dcc.Loading(type="circle", children=weighted_content), width=12
                 ),
-                className="mb-5",
-            ),
-            dbc.Row(
-                dbc.Col(generate_hourly_detection_plot(), width=12), className="my-3"
+                className="my-3",
             ),
             dbc.Row(
                 dbc.Col(
-                    html.H2("All of Today's Images", className="text-center mt-4"),
+                    [
+                        html.H4("Today - Hourly Detections", className="text-center"),
+                        hourly_chart,
+                    ],
                     width=12,
-                )
-            ),
-            dbc.Row(
-                dbc.Col(todays_paginated_gallery_content, width=12), className="my-3"
+                ),
+                className="my-3",
             ),
         ]
+        layout_children.extend(latest_strip_modals)
         return dbc.Container(layout_children, fluid=True)
 
     RUNTIME_BOOL_KEYS = {"DAY_AND_NIGHT_CAPTURE", "TELEGRAM_ENABLED"}
@@ -2180,6 +2382,68 @@ def create_web_interface(detection_manager):
     # -----------------------------
     # Dash Callbacks
     # -----------------------------
+    @app.callback(
+        Output("today-species-summary", "children"),
+        Input("today-species-summary-trigger", "n_intervals"),
+    )
+    def load_today_species_summary(n_intervals):
+        if n_intervals is None:
+            raise PreventUpdate
+        date_iso = datetime.now().strftime("%Y-%m-%d")
+        summary = get_daily_species_summary(date_iso)
+        if not summary:
+            return html.P(
+                "No species detected yet today.",
+                className="text-center text-muted",
+            )
+        rows = []
+        for item in summary[:12]:  # limit to keep render light
+            display_name = item["common_name"] or item["species"]
+            rows.append(
+                html.Tr(
+                    [
+                        html.Td(display_name),
+                        html.Td(item["species"]),
+                        html.Td(item["count"]),
+                    ]
+                )
+            )
+        return dbc.Table(
+            [
+                html.Thead(
+                    html.Tr(
+                        [
+                            html.Th("Name"),
+                            html.Th("Species ID"),
+                            html.Th("Count"),
+                        ]
+                    )
+                ),
+                html.Tbody(rows),
+            ],
+            bordered=True,
+            striped=True,
+        hover=True,
+        size="sm",
+    )
+
+    @app.callback(
+        Output("today-daily-summary", "children"),
+        Input("today-daily-summary-trigger", "n_intervals"),
+    )
+    def load_today_daily_summary(n_intervals):
+        if n_intervals is None:
+            raise PreventUpdate
+        date_iso = datetime.now().strftime("%Y-%m-%d")
+        try:
+            return get_gallery_daily_summary(date_iso)
+        except Exception as e:
+            logger.error(f"Error rendering daily summary for landing ({date_iso}): {e}")
+            return html.P(
+                "Could not load daily summary.",
+                className="text-center text-muted",
+            )
+
     # --- ADD Password Modal Structure ---
     @app.callback(
         Output("modal-container", "children"),
@@ -2476,6 +2740,28 @@ def create_web_interface(detection_manager):
             open_trigger_type="alltime-classifier-thumbnail",
             close_button_trigger_type="alltime-classifier-close",
             close_image_trigger_type="alltime-classifier-modal-image",
+            thumbnail_clicks=thumbnail_clicks,
+            close_clicks=close_clicks,
+            modal_image_clicks=modal_image_clicks,
+            current_states=current_states,
+        )
+
+    @app.callback(
+        Output({"type": "latest-strip-modal", "index": ALL}, "is_open"),
+        [
+            Input({"type": "latest-strip-thumbnail", "index": ALL}, "n_clicks"),
+            Input({"type": "latest-strip-close", "index": ALL}, "n_clicks"),
+            Input({"type": "latest-strip-modal-image", "index": ALL}, "n_clicks"),
+        ],
+        [State({"type": "latest-strip-modal", "index": ALL}, "is_open")],
+    )
+    def toggle_latest_strip_modal(
+        thumbnail_clicks, close_clicks, modal_image_clicks, current_states
+    ):
+        return _toggle_modal_generic(
+            open_trigger_type="latest-strip-thumbnail",
+            close_button_trigger_type="latest-strip-close",
+            close_image_trigger_type="latest-strip-modal-image",
             thumbnail_clicks=thumbnail_clicks,
             close_clicks=close_clicks,
             modal_image_clicks=modal_image_clicks,

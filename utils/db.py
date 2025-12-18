@@ -50,6 +50,12 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_images_optimized_name ON images(optimized_name);"
     )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_images_best_class ON images(best_class);"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_images_top1_class_name ON images(top1_class_name);"
+    )
 
 
 def insert_image(conn: sqlite3.Connection, row: Dict[str, Any]) -> None:
@@ -192,6 +198,21 @@ def fetch_hourly_counts(conn: sqlite3.Connection, date_str_iso: str) -> List[sql
     return cur.fetchall()
 
 
+def fetch_day_count(conn: sqlite3.Connection, date_str_iso: str) -> int:
+    """Returns COUNT(*) for a given date (YYYY-MM-DD)."""
+    date_prefix = date_str_iso.replace("-", "")
+    cur = conn.execute(
+        """
+        SELECT COUNT(*) AS cnt
+        FROM images
+        WHERE timestamp LIKE ? || '%';
+        """,
+        (date_prefix,),
+    )
+    row = cur.fetchone()
+    return int(row["cnt"]) if row else 0
+
+
 def fetch_daily_covers(conn: sqlite3.Connection) -> List[sqlite3.Row]:
     """Returns the newest optimized image per day for the gallery overview."""
     cur = conn.execute(
@@ -239,3 +260,27 @@ def update_downloaded_timestamp(
         params,
     )
     conn.commit()
+
+
+def fetch_daily_species_summary(
+    conn: sqlite3.Connection, date_str_iso: str
+) -> List[sqlite3.Row]:
+    """
+    Returns counts per species for a given date (YYYY-MM-DD).
+    Species is derived from classifier (top1_class_name) with detector fallback.
+    """
+    date_prefix = date_str_iso.replace("-", "")
+    cur = conn.execute(
+        """
+        SELECT
+            COALESCE(NULLIF(top1_class_name, ''), NULLIF(best_class, '')) AS species,
+            COUNT(*) AS count
+        FROM images
+        WHERE timestamp LIKE ? || '%'
+          AND COALESCE(NULLIF(top1_class_name, ''), NULLIF(best_class, '')) IS NOT NULL
+        GROUP BY species
+        ORDER BY count DESC;
+        """,
+        (date_prefix,),
+    )
+    return cur.fetchall()
