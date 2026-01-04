@@ -122,6 +122,11 @@ def create_web_interface(detection_manager):
         rows = fetch_images_by_date(db_conn, date_str_iso)
         return _rows_to_df(rows)
 
+    def _join_url_path(*parts):
+        """Builds URL-friendly paths regardless of OS separators."""
+        clean_parts = [str(part).strip("/\\") for part in parts if part]
+        return "/".join(clean_parts)
+
     def delete_image_files(relative_optimized_path):
         """Deletes original, optimized, and zoomed versions of an image."""
         base_path = os.path.join(output_dir, relative_optimized_path)
@@ -158,7 +163,7 @@ def create_web_interface(detection_manager):
                 if not timestamp or not optimized_name:
                     continue
                 date_folder = timestamp[:8]
-                rel_path = os.path.join(date_folder, optimized_name)
+                rel_path = _join_url_path(date_folder, optimized_name)
                 images.append(
                     (
                         timestamp,
@@ -186,7 +191,7 @@ def create_web_interface(detection_manager):
                 formatted_date = (
                     f"{date_key[:4]}-{date_key[4:6]}-{date_key[6:]}"
                 )
-                rel_path = os.path.join(date_key, optimized_name)
+                rel_path = _join_url_path(date_key, optimized_name)
                 covers[formatted_date] = rel_path
         except Exception as e:
             logger.error(f"Error reading daily covers from SQLite: {e}")
@@ -216,7 +221,7 @@ def create_web_interface(detection_manager):
                 if not timestamp or not optimized_name:
                     continue
                 date_folder = timestamp[:8]
-                rel_path = os.path.join(date_folder, optimized_name)
+                rel_path = _join_url_path(date_folder, optimized_name)
                 images.append(
                     (
                         timestamp,
@@ -305,7 +310,7 @@ def create_web_interface(detection_manager):
             optimized_name = row["optimized_name"]
             if not optimized_name:
                 continue
-            rel_path = os.path.join(date_iso.replace("-", ""), optimized_name)
+            rel_path = _join_url_path(date_iso.replace("-", ""), optimized_name)
             images_for_this_date.append(
                 (
                     rel_path,
@@ -358,7 +363,7 @@ def create_web_interface(detection_manager):
         """Builds edit tiles for a given date and dataframe."""
         tiles = []
         for _, row in df_input.iterrows():
-            relative_path = os.path.join(
+            relative_path = _join_url_path(
                 date_str_iso.replace("-", ""), row["optimized_name"]
             )
             checklist_value = relative_path
@@ -1689,7 +1694,7 @@ def create_web_interface(detection_manager):
             optimized_name = row["optimized_name"]
             if not optimized_name:
                 continue
-            rel_path = os.path.join(date.replace("-", ""), optimized_name)
+            rel_path = _join_url_path(date.replace("-", ""), optimized_name)
             item = (
                 rel_path,
                 row["best_class"],
@@ -1779,7 +1784,7 @@ def create_web_interface(detection_manager):
         else:
             for i, row in page_df.iterrows():
                 # Construct the relative path from date and optimized_name
-                relative_path = os.path.join(
+                relative_path = _join_url_path(
                     date.replace("-", ""), row["optimized_name"]
                 )
                 # Get other data from the row
@@ -2233,7 +2238,9 @@ def create_web_interface(detection_manager):
                 optimized_name = row["optimized_name"]
                 if not optimized_name:
                     continue
-                rel_path = os.path.join(today_date_iso.replace("-", ""), optimized_name)
+                rel_path = _join_url_path(
+                    today_date_iso.replace("-", ""), optimized_name
+                )
                 latest_strip.append(
                     (
                         rel_path,

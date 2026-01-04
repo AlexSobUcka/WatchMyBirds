@@ -252,6 +252,9 @@ For a webcam connected via USB use:
    python main.py
    ```
 
+Windows notes:
+- Gallery image URLs are generated with forward slashes for compatibility. If you previously saw broken thumbnails, hard-refresh the page after updating.
+
 
 ## 📺 Usage
    The livestream will be available at:
