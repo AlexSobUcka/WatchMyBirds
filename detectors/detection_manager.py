@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 import cv2
 import pytz
 from astral.geocoder import database, lookup
-from astral.sun import sun
 import piexif
 import piexif.helper
 from detectors.detector import Detector
@@ -32,6 +31,7 @@ from utils.db import (
     fetch_day_images,
     fetch_daily_species_summary,
 )
+from utils.daylight import is_daytime
 
 """
 This module defines the DetectionManager class, which orchestrates video frame acquisition,
@@ -251,29 +251,8 @@ class DetectionManager:
 
     # >>> Daytime Check Function >>>
     def _is_daytime(self, city_name):
-        """Determines daylight using Astral with a cached result (sun-position basis)."""
-        try:
-            now_ts = time.time()
-            cache = self._daytime_cache
-            if (
-                cache["city"] == city_name
-                and (now_ts - cache["ts"]) < self._daytime_ttl
-            ):
-                return cache["value"]
-
-            city = lookup(city_name, database())
-            tz = pytz.timezone(city.timezone)
-            now = datetime.now(tz)
-            dawn_depression = 12
-            s = sun(
-                city.observer, date=now, tzinfo=tz, dawn_dusk_depression=dawn_depression
-            )
-            value = s["dawn"] < now < s["dusk"]
-            cache.update({"city": city_name, "value": value, "ts": now_ts})
-            return value
-        except Exception as e:
-            logger.error(f"Error determining daylight status: {e}")
-            return True  # Defaults to daytime (per existing behavior)
+        """Ermittelt Tageslichtstatus fuer die Detektion."""
+        return is_daytime(city_name, self._daytime_cache, self._daytime_ttl)
 
     def _resolve_telegram_timezone(self):
         tz_name = str(self.config.get("TELEGRAM_TIMEZONE", "")).strip()
@@ -639,9 +618,9 @@ class DetectionManager:
                 self.previous_frame_hash = None
                 self.consecutive_identical_frames = 0
 
-            if not (
+            if (
                 self.config["DAY_AND_NIGHT_CAPTURE"]
-                or self._is_daytime(self.config["DAY_AND_NIGHT_CAPTURE_LOCATION"])
+                and not self._is_daytime(self.config["DAY_AND_NIGHT_CAPTURE_LOCATION"])
             ):
                 logger.info("Not enough light for detection. Sleeping for 60 seconds.")
                 time.sleep(60)

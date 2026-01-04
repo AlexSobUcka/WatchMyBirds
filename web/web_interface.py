@@ -47,6 +47,7 @@ from utils.db import (
     fetch_day_count,
     fetch_daily_species_summary,
 )
+from utils.daylight import is_daytime
 
 config = get_config()
 db_conn = get_connection()
@@ -66,6 +67,8 @@ _daily_species_summary_cache = {}
 _DAILY_SPECIES_CACHE_TTL = 300  # seconds
 _daily_gallery_summary_cache = {}
 _DAILY_GALLERY_SUMMARY_TTL = 300  # seconds
+_STREAM_DAYTIME_CACHE = {"city": None, "value": True, "ts": 0.0}
+_STREAM_DAYTIME_TTL = 300  # seconds
 
 
 def create_web_interface(detection_manager):
@@ -1930,6 +1933,21 @@ def create_web_interface(detection_manager):
 
         return dbc.Container(container_elements, fluid=True)
 
+    def _resolve_stream_fps():
+        """Waehlt stream FPS anhand Tageszeit-Overrides."""
+        stream_fps_day = config.get("STREAM_FPS_DAY")
+        stream_fps_night = config.get("STREAM_FPS_NIGHT")
+        if stream_fps_day is None and stream_fps_night is None:
+            return config.get("STREAM_FPS", 0)
+
+        location = str(config.get("DAY_AND_NIGHT_CAPTURE_LOCATION", "")).strip()
+        is_day = is_daytime(location, _STREAM_DAYTIME_CACHE, _STREAM_DAYTIME_TTL)
+        if is_day and stream_fps_day is not None:
+            return stream_fps_day
+        if not is_day and stream_fps_night is not None:
+            return stream_fps_night
+        return config.get("STREAM_FPS", 0)
+
     def generate_video_feed():
         # Load placeholder once
         static_placeholder_path = "assets/static_placeholder.jpg"
@@ -2007,7 +2025,7 @@ def create_web_interface(detection_manager):
                     b"Content-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
                 )
             elapsed = time.time() - start_time
-            stream_fps = config.get("STREAM_FPS", 0)
+            stream_fps = _resolve_stream_fps()
             if stream_fps and stream_fps > 0:
                 desired_frame_time = 1.0 / stream_fps
                 if elapsed < desired_frame_time:
@@ -2419,6 +2437,10 @@ def create_web_interface(detection_manager):
         "FUSION_ALPHA",
         "STREAM_FPS",
         "STREAM_FPS_CAPTURE",
+        "STREAM_FPS_DAY",
+        "STREAM_FPS_NIGHT",
+        "STREAM_FPS_CAPTURE_DAY",
+        "STREAM_FPS_CAPTURE_NIGHT",
         "TELEGRAM_COOLDOWN",
     }
 
@@ -2432,6 +2454,10 @@ def create_web_interface(detection_manager):
         "DAY_AND_NIGHT_CAPTURE_LOCATION",
         "STREAM_FPS",
         "STREAM_FPS_CAPTURE",
+        "STREAM_FPS_DAY",
+        "STREAM_FPS_NIGHT",
+        "STREAM_FPS_CAPTURE_DAY",
+        "STREAM_FPS_CAPTURE_NIGHT",
         "TELEGRAM_COOLDOWN",
         "TELEGRAM_ENABLED",
         "EDIT_PASSWORD",
@@ -2452,6 +2478,8 @@ def create_web_interface(detection_manager):
     ]
 
     def _format_value(value):
+        if value is None:
+            return ""
         if isinstance(value, dict) and "latitude" in value and "longitude" in value:
             return f"{value['latitude']}, {value['longitude']}"
         if isinstance(value, bool):

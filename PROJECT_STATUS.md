@@ -16,6 +16,8 @@ Some Notes:
 ---
 
 ## Recent Changes
+- 2026-01-04: Added day/night stream FPS overrides for capture and UI.
+- 2026-01-04: Added a helper script to print current sunrise/sunset window and gate status.
 - 2026-01-04: Added Telegram rule selection (basic vs daily summary) with daily stats and per-species collages.
 - 2026-01-04: Normalized gallery image URLs to use forward slashes so thumbnails load on Windows.
 - 2025-12-18: Added model provenance columns (`detector_model_id`, `classifier_model_id`) to SQLite and populate them from `latest_models.json`.

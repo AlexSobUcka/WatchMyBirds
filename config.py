@@ -16,18 +16,22 @@ DEFAULTS = {
     "VIDEO_SOURCE": "0",
     "LOCATION_DATA": {"latitude": 60.01766855467349, "longitude": 30.329568563996702},
     "DETECTOR_MODEL_CHOICE": "yolo",
-    "CONFIDENCE_THRESHOLD_DETECTION": 0.55,
-    "SAVE_THRESHOLD": 0.55,
+    "CONFIDENCE_THRESHOLD_DETECTION": 0.75,
+    "SAVE_THRESHOLD": 0.85,
     "MAX_FPS_DETECTION": 0.5,
     "MODEL_BASE_PATH": "/models",
     "CLASSIFIER_CONFIDENCE_THRESHOLD": 0.55,
     "FUSION_ALPHA": 0.5,
     "STREAM_FPS": 0.0,
     "STREAM_FPS_CAPTURE": 0.0,
-    "STREAM_WIDTH_OUTPUT_RESIZE": 640,
+    "STREAM_FPS_DAY": None,
+    "STREAM_FPS_NIGHT": None,
+    "STREAM_FPS_CAPTURE_DAY": None,
+    "STREAM_FPS_CAPTURE_NIGHT": None,
+    "STREAM_WIDTH_OUTPUT_RESIZE": 560,
     "DAY_AND_NIGHT_CAPTURE": True,
     "DAY_AND_NIGHT_CAPTURE_LOCATION": "Moscow",
-    "CPU_LIMIT": 1,
+    "CPU_LIMIT": 8,
     "TELEGRAM_COOLDOWN": 5.0,
     "EDIT_PASSWORD": "SECRET_PASSWORD",
     "TELEGRAM_ENABLED": True,
@@ -44,6 +48,10 @@ RUNTIME_KEYS = {
     "DAY_AND_NIGHT_CAPTURE_LOCATION",
     "STREAM_FPS",
     "STREAM_FPS_CAPTURE",
+    "STREAM_FPS_DAY",
+    "STREAM_FPS_NIGHT",
+    "STREAM_FPS_CAPTURE_DAY",
+    "STREAM_FPS_CAPTURE_NIGHT",
     "CLASSIFIER_CONFIDENCE_THRESHOLD",
     "FUSION_ALPHA",
     "TELEGRAM_COOLDOWN",
@@ -90,6 +98,10 @@ def _load_config():
         "FUSION_ALPHA",
         "STREAM_FPS",
         "STREAM_FPS_CAPTURE",
+        "STREAM_FPS_DAY",
+        "STREAM_FPS_NIGHT",
+        "STREAM_FPS_CAPTURE_DAY",
+        "STREAM_FPS_CAPTURE_NIGHT",
         "TELEGRAM_COOLDOWN",
     ):
         if os.getenv(key) is not None:
@@ -163,6 +175,14 @@ def _coerce_config_types(config):
     except Exception:
         config["STREAM_FPS_CAPTURE"] = 0.0
 
+    for key in (
+        "STREAM_FPS_DAY",
+        "STREAM_FPS_NIGHT",
+        "STREAM_FPS_CAPTURE_DAY",
+        "STREAM_FPS_CAPTURE_NIGHT",
+    ):
+        config[key] = _coerce_optional_nonneg_float(config.get(key))
+
     # CPU_LIMIT should be positive int; fallback to 1
     try:
         cpu_limit = int(float(config.get("CPU_LIMIT", 1)))
@@ -206,6 +226,20 @@ def _coerce_bool(value):
     if isinstance(value, str):
         return value.strip().lower() in ("true", "1", "yes", "y", "on")
     return False
+
+
+def _coerce_optional_nonneg_float(value):
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        val = float(value)
+    except Exception:
+        return None
+    if val < 0:
+        return None
+    return val
 
 
 def get_settings_payload():
@@ -275,7 +309,18 @@ def _validate_value(key, value):
         if 0.0 <= val <= 1.0:
             return True, val
         return False, None
-    if key in ("STREAM_FPS", "STREAM_FPS_CAPTURE"):
+    if key in (
+        "STREAM_FPS",
+        "STREAM_FPS_CAPTURE",
+        "STREAM_FPS_DAY",
+        "STREAM_FPS_NIGHT",
+        "STREAM_FPS_CAPTURE_DAY",
+        "STREAM_FPS_CAPTURE_NIGHT",
+    ):
+        if value is None:
+            return True, None
+        if isinstance(value, str) and not value.strip():
+            return True, None
         try:
             val = float(value)
         except Exception:

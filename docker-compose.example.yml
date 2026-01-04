@@ -15,6 +15,10 @@ services:
       - STREAM_WIDTH_OUTPUT_RESIZE=640                       # Preview width for live stream
       - STREAM_FPS=0                                         # UI MJPEG throttle (0 = no throttle)
       - STREAM_FPS_CAPTURE=0                                 # Capture throttle (0 = no throttle)
+      - STREAM_FPS_DAY=                                      # Optional UI FPS during daytime
+      - STREAM_FPS_NIGHT=                                    # Optional UI FPS during nighttime
+      - STREAM_FPS_CAPTURE_DAY=                              # Optional capture FPS during daytime
+      - STREAM_FPS_CAPTURE_NIGHT=                            # Optional capture FPS during nighttime
       - CONFIDENCE_THRESHOLD_DETECTION=0.55                  # Detector display threshold
       - SAVE_THRESHOLD=0.55                                  # Detector save threshold
       - MAX_FPS_DETECTION=0.5                                # Target detection loop rate (FPS)

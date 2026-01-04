@@ -22,8 +22,27 @@ import weakref
 import json
 from pathlib import Path
 from logging_config import get_logger
+from utils.daylight import is_daytime
 
 logger = get_logger(__name__)
+_STREAM_DAYTIME_CACHE = {"city": None, "value": True, "ts": 0.0}
+_STREAM_DAYTIME_TTL = 300  # seconds
+
+
+def _resolve_capture_fps():
+    """Waehlt capture FPS anhand Tageszeit-Overrides."""
+    capture_fps_day = config.get("STREAM_FPS_CAPTURE_DAY")
+    capture_fps_night = config.get("STREAM_FPS_CAPTURE_NIGHT")
+    if capture_fps_day is None and capture_fps_night is None:
+        return config.get("STREAM_FPS_CAPTURE", 0)
+
+    location = str(config.get("DAY_AND_NIGHT_CAPTURE_LOCATION", "")).strip()
+    is_day = is_daytime(location, _STREAM_DAYTIME_CACHE, _STREAM_DAYTIME_TTL)
+    if is_day and capture_fps_day is not None:
+        return capture_fps_day
+    if not is_day and capture_fps_night is not None:
+        return capture_fps_night
+    return config.get("STREAM_FPS_CAPTURE", 0)
 
 
 class VideoCapture:
@@ -735,7 +754,7 @@ class VideoCapture:
 
                     # Slow down reading to match configured STREAM_FPS_CAPTURE (0 disables throttling)
                     try:
-                        capture_fps = float(config.get("STREAM_FPS_CAPTURE", 0))
+                        capture_fps = float(_resolve_capture_fps() or 0.0)
                     except Exception:
                         capture_fps = 0.0
                     if capture_fps > 0:

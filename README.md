@@ -114,8 +114,12 @@ Set these as environment variables in your `.env` or docker-compose `environment
 | `FUSION_ALPHA` | `0.5` | Detector/classifier fusion weight in UI summaries. |
 | `STREAM_FPS_CAPTURE` | `0` | Capture throttle (0 disables throttling). |
 | `STREAM_FPS` | `0` | UI MJPEG feed throttle (0 disables throttling). |
+| `STREAM_FPS_DAY` | `None` | Optional UI FPS during daytime; overrides `STREAM_FPS` when set. |
+| `STREAM_FPS_NIGHT` | `None` | Optional UI FPS during nighttime; overrides `STREAM_FPS` when set. |
+| `STREAM_FPS_CAPTURE_DAY` | `None` | Optional capture FPS during daytime; overrides `STREAM_FPS_CAPTURE` when set. |
+| `STREAM_FPS_CAPTURE_NIGHT` | `None` | Optional capture FPS during nighttime; overrides `STREAM_FPS_CAPTURE` when set. |
 | `STREAM_WIDTH_OUTPUT_RESIZE` | `640` | Width for the live stream preview in the UI. |
-| `DAY_AND_NIGHT_CAPTURE` | `True` | Enable daylight gating for detections. |
+| `DAY_AND_NIGHT_CAPTURE` | `True` | Enable sunrise/sunset gating for detections. |
 | `DAY_AND_NIGHT_CAPTURE_LOCATION` | `Berlin` | City name for Astral daylight check. |
 | `CPU_LIMIT` | `1` | CPU affinity cap (<=0 disables affinity). |
 | `TELEGRAM_COOLDOWN` | `5` | Cooldown (seconds) between Telegram alerts. |
@@ -267,6 +271,9 @@ Windows notes:
    The livestream will be available at:
    - Local: `http://localhost:8050`
    - Remote: `http://<your-server-ip>:8050`
+
+Day/night check helper:
+- Run `python scripts/check_daylight.py` to print the current sunrise/sunset window and whether the gate is active for the configured location.
 
 ---
 
