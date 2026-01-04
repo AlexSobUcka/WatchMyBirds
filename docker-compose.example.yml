@@ -26,6 +26,9 @@ services:
       - CPU_LIMIT=1                                          # CPU affinity cap (<=0 disables)
       - TELEGRAM_COOLDOWN=5                                  # Seconds between Telegram alerts
       - TELEGRAM_ENABLED=True                                # Gate sending; tokens/chat IDs remain env-only
+      - TELEGRAM_RULE=basic                                  # basic or daily_summary
+      - TELEGRAM_DAILY_SUMMARY_TIME=21:00                    # HH:MM (24h) for daily summary
+      - TELEGRAM_TIMEZONE=Europe/Berlin                      # IANA timezone for daily summary
       - EDIT_PASSWORD=SECRET_PASSWORD                        # Password for edit page
       # Telegram credentials (required if Telegram enabled)
       - TELEGRAM_BOT_TOKEN=your_token_here

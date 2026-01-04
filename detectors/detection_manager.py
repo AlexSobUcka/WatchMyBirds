@@ -21,11 +21,17 @@ from detectors.classifier import ImageClassifier
 from camera.video_capture import VideoCapture
 from utils.telegram_notifier import send_telegram_message
 from logging_config import get_logger
+from PIL import Image
 import os
 import json
 import hashlib
 import queue
-from utils.db import get_connection, insert_image
+from utils.db import (
+    get_connection,
+    insert_image,
+    fetch_day_images,
+    fetch_daily_species_summary,
+)
 
 """
 This module defines the DetectionManager class, which orchestrates video frame acquisition,
@@ -207,6 +213,20 @@ class DetectionManager:
         self.output_dir = self.config["OUTPUT_DIR"]
         os.makedirs(self.output_dir, exist_ok=True)
 
+        self.telegram_rule = (
+            str(self.config.get("TELEGRAM_RULE", "basic")).strip().lower()
+        )
+        if self.telegram_rule not in {"basic", "daily_summary"}:
+            logger.warning(
+                f"Unknown TELEGRAM_RULE '{self.telegram_rule}', falling back to 'basic'."
+            )
+            self.telegram_rule = "basic"
+        self.telegram_daily_summary_time = str(
+            self.config.get("TELEGRAM_DAILY_SUMMARY_TIME", "21:00")
+        ).strip()
+        self.telegram_timezone = self._resolve_telegram_timezone()
+        self.last_daily_summary_date = None
+
         # For clean shutdown.
         self.stop_event = threading.Event()
 
@@ -254,6 +274,196 @@ class DetectionManager:
         except Exception as e:
             logger.error(f"Error determining daylight status: {e}")
             return True  # Defaults to daytime (per existing behavior)
+
+    def _resolve_telegram_timezone(self):
+        tz_name = str(self.config.get("TELEGRAM_TIMEZONE", "")).strip()
+        if tz_name:
+            try:
+                return pytz.timezone(tz_name)
+            except Exception as e:
+                logger.warning(f"Invalid TELEGRAM_TIMEZONE '{tz_name}': {e}")
+
+        location = self.config.get("DAY_AND_NIGHT_CAPTURE_LOCATION")
+        if location:
+            try:
+                city = lookup(location, database())
+                return pytz.timezone(city.timezone)
+            except Exception as e:
+                logger.warning(
+                    "Failed to resolve timezone from DAY_AND_NIGHT_CAPTURE_LOCATION "
+                    f"'{location}': {e}"
+                )
+        return pytz.UTC
+
+    def _parse_daily_summary_time(self):
+        raw = self.telegram_daily_summary_time
+        if not raw:
+            return 21, 0
+        parts = raw.split(":")
+        if len(parts) != 2:
+            return 21, 0
+        try:
+            hour = int(parts[0])
+            minute = int(parts[1])
+        except ValueError:
+            return 21, 0
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return hour, minute
+        return 21, 0
+
+    def _maybe_send_daily_summary(self):
+        if self.telegram_rule != "daily_summary":
+            return
+        if not self.config.get("TELEGRAM_ENABLED", True):
+            return
+        if not self.telegram_timezone:
+            return
+
+        now_local = datetime.now(self.telegram_timezone)
+        today_str = now_local.strftime("%Y-%m-%d")
+        if self.last_daily_summary_date == today_str:
+            return
+
+        hour, minute = self._parse_daily_summary_time()
+        scheduled = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if now_local < scheduled:
+            return
+
+        self._send_daily_summary(today_str)
+        self.last_daily_summary_date = today_str
+
+    def _format_daily_summary_message(self, date_str_iso, rows):
+        if not rows:
+            return "Птицы кормушку не посещали"
+
+        total_count = sum(int(row["count"]) for row in rows if row["count"] is not None)
+        species_count = sum(1 for row in rows if row["species"])
+        lines = [
+            f"Итоги дня ({date_str_iso})",
+            f"Накормлено птиц: {total_count}",
+            f"Птичьи личности: {species_count}",
+        ]
+        for row in rows:
+            species = row["species"]
+            count = row["count"]
+            if not species:
+                continue
+            display_name = str(species).replace("_", " ")
+            lines.append(f"- {display_name}: {int(count)}")
+        return "\n".join(lines)
+
+    def _select_collage_paths(self, items):
+        if not items:
+            return []
+        if len(items) >= 9:
+            limit = 9
+        elif len(items) >= 4:
+            limit = 4
+        else:
+            limit = 1
+        items_sorted = sorted(items, key=lambda x: x[0], reverse=True)
+        return [path for _, path in items_sorted[:limit]]
+
+    def _load_square_image(self, image_path, size_px):
+        try:
+            image = Image.open(image_path).convert("RGB")
+        except Exception as e:
+            logger.warning(f"Failed to open image '{image_path}': {e}")
+            return None
+
+        width, height = image.size
+        if width != height:
+            side = min(width, height)
+            left = int((width - side) / 2)
+            top = int((height - side) / 2)
+            image = image.crop((left, top, left + side, top + side))
+
+        resample = getattr(Image, "Resampling", Image).LANCZOS
+        return image.resize((size_px, size_px), resample)
+
+    def _build_collage(self, image_paths, output_path):
+        if not image_paths:
+            return None
+        grid_map = {1: 1, 4: 2, 9: 3}
+        grid = grid_map.get(len(image_paths))
+        if not grid:
+            return None
+        cell_size = 320
+        collage_size = (grid * cell_size, grid * cell_size)
+        collage = Image.new("RGB", collage_size, color=(0, 0, 0))
+
+        for idx, image_path in enumerate(image_paths):
+            row = idx // grid
+            col = idx % grid
+            tile = self._load_square_image(image_path, cell_size)
+            if tile is None:
+                continue
+            collage.paste(tile, (col * cell_size, row * cell_size))
+
+        try:
+            collage.save(output_path, "JPEG", quality=85)
+        except Exception as e:
+            logger.warning(f"Failed to save collage '{output_path}': {e}")
+            return None
+        return output_path
+
+    def _collect_daily_species_images(self, date_str_iso):
+        date_prefix = date_str_iso.replace("-", "")
+        rows = fetch_day_images(self.db_conn, date_str_iso)
+        images_by_species = {}
+        for row in rows:
+            species = row["top1_class_name"] or row["best_class"]
+            if not species:
+                continue
+            zoomed_name = row["zoomed_name"] or ""
+            optimized_name = row["optimized_name"] or ""
+            filename = zoomed_name if zoomed_name else optimized_name
+            if not filename:
+                continue
+            full_path = os.path.join(self.output_dir, date_prefix, filename)
+            if not os.path.exists(full_path):
+                continue
+            confidence = row["top1_confidence"]
+            try:
+                confidence = float(confidence) if confidence is not None else 0.0
+            except Exception:
+                confidence = 0.0
+            images_by_species.setdefault(species, []).append((confidence, full_path))
+        return images_by_species
+
+    def _send_daily_summary(self, date_str_iso):
+        rows = fetch_daily_species_summary(self.db_conn, date_str_iso)
+        message = self._format_daily_summary_message(date_str_iso, rows)
+        send_telegram_message(message)
+
+        if not rows:
+            return
+
+        images_by_species = self._collect_daily_species_images(date_str_iso)
+        if not images_by_species:
+            return
+
+        collage_dir = os.path.join(self.output_dir, "telegram")
+        os.makedirs(collage_dir, exist_ok=True)
+        species_order = [
+            row["species"]
+            for row in rows
+            if row["species"] in images_by_species
+        ]
+        for species in species_order:
+            items = images_by_species.get(species, [])
+            selected_paths = self._select_collage_paths(items)
+            if not selected_paths:
+                continue
+            grid_size = len(selected_paths)
+            safe_species = re.sub(r"[^A-Za-z0-9_-]+", "_", str(species))
+            collage_name = f"{date_str_iso}_{safe_species}_{grid_size}.jpg"
+            collage_path = os.path.join(collage_dir, collage_name)
+            result_path = self._build_collage(selected_paths, collage_path)
+            if not result_path:
+                continue
+            display_name = str(species).replace("_", " ")
+            send_telegram_message(f"Вид: {display_name}", photo_path=result_path)
 
     # >>> Initialize Components >>>
     def _initialize_components(self):
@@ -388,6 +598,7 @@ class DetectionManager:
         """
         logger.info("Detection loop (worker) started.")
         while not self.stop_event.is_set():
+            self._maybe_send_daily_summary()
             if not self._initialize_components():
                 logger.debug("Components not ready yet; retrying shortly.")
                 time.sleep(1)
@@ -610,13 +821,13 @@ class DetectionManager:
                     save_success_optimized = cv2.imwrite(
                         optimized_path,
                         optimized_frame,
-                        [int(cv2.IMWRITE_JPEG_QUALITY), 70],
+                        [int(cv2.IMWRITE_JPEG_QUALITY), 85],
                     )
                 else:
                     save_success_optimized = cv2.imwrite(
                         optimized_path,
                         original_frame,
-                        [int(cv2.IMWRITE_JPEG_QUALITY), 70],
+                        [int(cv2.IMWRITE_JPEG_QUALITY), 85],
                     )
 
                 if save_success_optimized:
@@ -670,7 +881,7 @@ class DetectionManager:
                         save_success_zoomed = cv2.imwrite(
                             zoomed_path,
                             zoomed_frame,
-                            [int(cv2.IMWRITE_JPEG_QUALITY), 70],
+                            [int(cv2.IMWRITE_JPEG_QUALITY), 85],
                         )
                         if save_success_zoomed:
                             add_exif_metadata(
@@ -719,6 +930,9 @@ class DetectionManager:
             except Exception as e:
                 logger.error(f"Error writing detection to SQLite: {e}")
 
+            if self.telegram_rule != "basic":
+                continue
+
             # Telegram notification (best-effort).
             self.detection_occurred = True
             self.detection_counter += len(detection_info_list)
@@ -746,9 +960,9 @@ class DetectionManager:
                             sorted(self.detection_classes_agg)
                         )
                         alert_text = (
-                            f"🔎 Detection Alert!\n"
-                            f"Detected: {aggregated_classes}\n"
-                            f"Total ({len(detection_info_list)} new / {self.detection_counter} since last alert)"
+                            "Пуп!"
+                            f"Ага: {aggregated_classes}"
+                            f"Тут ({len(detection_info_list)} текст {self.detection_counter} и вот)"
                         )
 
                         photo_to_send = None

@@ -31,6 +31,9 @@ DEFAULTS = {
     "TELEGRAM_COOLDOWN": 5.0,
     "EDIT_PASSWORD": "SECRET_PASSWORD",
     "TELEGRAM_ENABLED": True,
+    "TELEGRAM_RULE": "basic",
+    "TELEGRAM_DAILY_SUMMARY_TIME": "21:00",
+    "TELEGRAM_TIMEZONE": "",
 }
 
 RUNTIME_KEYS = {
@@ -72,6 +75,9 @@ def _load_config():
         "MODEL_BASE_PATH",
         "DAY_AND_NIGHT_CAPTURE_LOCATION",
         "EDIT_PASSWORD",
+        "TELEGRAM_RULE",
+        "TELEGRAM_DAILY_SUMMARY_TIME",
+        "TELEGRAM_TIMEZONE",
     ):
         if os.getenv(key) is not None:
             config[key] = os.getenv(key)

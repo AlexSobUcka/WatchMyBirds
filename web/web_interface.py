@@ -2446,6 +2446,9 @@ def create_web_interface(detection_manager):
         "DETECTOR_MODEL_CHOICE",
         "STREAM_WIDTH_OUTPUT_RESIZE",
         "LOCATION_DATA",
+        "TELEGRAM_RULE",
+        "TELEGRAM_DAILY_SUMMARY_TIME",
+        "TELEGRAM_TIMEZONE",
     ]
 
     def _format_value(value):

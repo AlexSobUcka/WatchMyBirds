@@ -120,6 +120,9 @@ Set these as environment variables in your `.env` or docker-compose `environment
 | `CPU_LIMIT` | `1` | CPU affinity cap (<=0 disables affinity). |
 | `TELEGRAM_COOLDOWN` | `5` | Cooldown (seconds) between Telegram alerts. |
 | `TELEGRAM_ENABLED` | `True` | Enables/disables Telegram sends (tokens remain env-only). |
+| `TELEGRAM_RULE` | `basic` | Notification mode: `basic` (per detection) or `daily_summary`. |
+| `TELEGRAM_DAILY_SUMMARY_TIME` | `21:00` | Daily summary time (HH:MM, 24h) for `daily_summary` mode. |
+| `TELEGRAM_TIMEZONE` | (empty) | IANA timezone for daily summary; falls back to `DAY_AND_NIGHT_CAPTURE_LOCATION` timezone or UTC. |
 | `EDIT_PASSWORD` | `SECRET_PASSWORD` | Password for edit page access in the UI. |
 
 Telegram env vars (read directly by `utils/telegram_notifier.py`, not via `config.py`):
@@ -128,6 +131,10 @@ Telegram env vars (read directly by `utils/telegram_notifier.py`, not via `confi
 | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | (empty) | Bot token for notifications. |
 | `TELEGRAM_CHAT_ID` | (empty) | Chat ID or JSON array of chat IDs. |
+
+Telegram rules:
+- `basic`: sends a message per detection burst (throttled by `TELEGRAM_COOLDOWN`).
+- `daily_summary`: sends a daily stats message at `TELEGRAM_DAILY_SUMMARY_TIME` and per-species collages (1/4/9 images based on that species' daily count). If no detections, a single message is sent.
 
 Unused settings: none found in current code; all keys in `config.py` are referenced.
 
