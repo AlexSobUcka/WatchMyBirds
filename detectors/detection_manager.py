@@ -774,6 +774,88 @@ class DetectionManager:
             save_success_optimized = False
             actual_zoomed_path = None
 
+            top1_class_name = ""
+            top1_confidence = ""
+            zoomed_frame = None
+            if detection_info_list:
+                try:
+                    bbox = (
+                        best_det["x1"],
+                        best_det["y1"],
+                        best_det["x2"],
+                        best_det["y2"],
+                    )
+                    zoomed_frame_raw = self.create_square_crop(
+                        original_frame, bbox, margin_percent=0.1
+                    )
+
+                    if zoomed_frame_raw is not None and zoomed_frame_raw.size > 0:
+                        zoomed_frame = cv2.resize(
+                            zoomed_frame_raw,
+                            (
+                                self.SAVE_RESOLUTION_ZOOMED,
+                                self.SAVE_RESOLUTION_ZOOMED,
+                            ),
+                        )
+
+                        try:
+                            zoomed_frame_rgb = cv2.cvtColor(
+                                zoomed_frame, cv2.COLOR_BGR2RGB
+                            )
+                            _, _, top1_class_name, top1_confidence = (
+                                self.classifier.predict_from_image(zoomed_frame_rgb)
+                            )
+                        except Exception as e:
+                            logger.error(f"Classification failed: {e}")
+                            top1_class_name = "CLASSIFICATION_ERROR"
+                            top1_confidence = 0.0
+
+                    else:
+                        logger.warning(
+                            "Zoomed frame generation failed or resulted in empty image. Skipping save."
+                        )
+                        zoomed_name = ""
+                except cv2.error as e:
+                    logger.error(
+                        f"OpenCV error during zoomed image processing/saving: {e}"
+                    )
+                    zoomed_name = ""
+                except Exception as e:
+                    logger.error(
+                        f"Unexpected error during zoomed image processing/saving: {e}"
+                    )
+                    zoomed_name = ""
+
+            logger.debug(f"Classification Result: {top1_class_name} - {top1_confidence}")
+
+            should_save = True
+            if self.config.get("SAVE_REQUIRES_CLASSIFIER", False):
+                try:
+                    classifier_confidence = float(top1_confidence)
+                except Exception:
+                    classifier_confidence = 0.0
+                detector_label = str(best_class_sanitized).strip().lower()
+                classifier_label = (
+                    str(top1_class_name or "").replace(" ", "_").strip().lower()
+                )
+                classifier_threshold = float(
+                    self.config.get("CLASSIFIER_CONFIDENCE_THRESHOLD", 0.55)
+                )
+                should_save = (
+                    classifier_confidence >= classifier_threshold
+                    and classifier_label == detector_label
+                )
+                if not should_save:
+                    logger.info(
+                        "Classifier gate skipped save (detector=%s, classifier=%s %.2f < %.2f).",
+                        detector_label,
+                        classifier_label,
+                        classifier_confidence,
+                        classifier_threshold,
+                    )
+            if not should_save:
+                continue
+
             try:
                 save_success_original = cv2.imwrite(original_path, original_frame)
                 if save_success_original:
@@ -822,71 +904,20 @@ class DetectionManager:
                     f"Unexpected error during optimized image processing/saving: {e}"
                 )
 
-            top1_class_name = ""
-            top1_confidence = ""
-            if detection_info_list:
-                try:
-                    bbox = (
-                        best_det["x1"],
-                        best_det["y1"],
-                        best_det["x2"],
-                        best_det["y2"],
+            if zoomed_frame is not None:
+                save_success_zoomed = cv2.imwrite(
+                    zoomed_path,
+                    zoomed_frame,
+                    [int(cv2.IMWRITE_JPEG_QUALITY), 85],
+                )
+                if save_success_zoomed:
+                    add_exif_metadata(
+                        zoomed_path, capture_time_precise, self.location_config
                     )
-                    zoomed_frame_raw = self.create_square_crop(
-                        original_frame, bbox, margin_percent=0.1
-                    )
-
-                    if zoomed_frame_raw is not None and zoomed_frame_raw.size > 0:
-                        zoomed_frame = cv2.resize(
-                            zoomed_frame_raw,
-                            (
-                                self.SAVE_RESOLUTION_ZOOMED,
-                                self.SAVE_RESOLUTION_ZOOMED,
-                            ),
-                        )
-
-                        try:
-                            zoomed_frame_rgb = cv2.cvtColor(
-                                zoomed_frame, cv2.COLOR_BGR2RGB
-                            )
-                            _, _, top1_class_name, top1_confidence = (
-                                self.classifier.predict_from_image(zoomed_frame_rgb)
-                            )
-                        except Exception as e:
-                            logger.error(f"Classification failed: {e}")
-                            top1_class_name = "CLASSIFICATION_ERROR"
-                            top1_confidence = 0.0
-
-                        save_success_zoomed = cv2.imwrite(
-                            zoomed_path,
-                            zoomed_frame,
-                            [int(cv2.IMWRITE_JPEG_QUALITY), 85],
-                        )
-                        if save_success_zoomed:
-                            add_exif_metadata(
-                                zoomed_path, capture_time_precise, self.location_config
-                            )
-                            actual_zoomed_path = zoomed_path
-                        else:
-                            logger.error(f"Failed to save zoomed image: {zoomed_path}")
-                            zoomed_name = ""
-                    else:
-                        logger.warning(
-                            "Zoomed frame generation failed or resulted in empty image. Skipping save."
-                        )
-                        zoomed_name = ""
-                except cv2.error as e:
-                    logger.error(
-                        f"OpenCV error during zoomed image processing/saving: {e}"
-                    )
+                    actual_zoomed_path = zoomed_path
+                else:
+                    logger.error(f"Failed to save zoomed image: {zoomed_path}")
                     zoomed_name = ""
-                except Exception as e:
-                    logger.error(
-                        f"Unexpected error during zoomed image processing/saving: {e}"
-                    )
-                    zoomed_name = ""
-
-            logger.debug(f"Classification Result: {top1_class_name} - {top1_confidence}")
 
             try:
                 insert_image(

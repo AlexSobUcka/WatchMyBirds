@@ -102,15 +102,16 @@ Set these as environment variables in your `.env` or docker-compose `environment
 | Setting | Default | Description |
 | --- | --- | --- |
 | `DEBUG_MODE` | `False` | Enable verbose logging and debug behavior. |
-| `OUTPUT_DIR` | `/output` | Base directory for images and `images.db`. |
+| `OUTPUT_DIR` | `/output` | Base directory for images and `images.db` (relative paths resolve to the project root). |
 | `VIDEO_SOURCE` | `0` | Camera source (int for webcam, string for RTSP/HTTP). |
 | `LOCATION_DATA` | `52.516, 13.377` | GPS lat/lon for EXIF (`"lat, lon"`). |
 | `DETECTOR_MODEL_CHOICE` | `yolo` | Detection model selector (currently `yolo`). |
 | `CONFIDENCE_THRESHOLD_DETECTION` | `0.55` | Detector confidence threshold for display logic. |
 | `SAVE_THRESHOLD` | `0.55` | Detector confidence threshold to save a detection. |
 | `MAX_FPS_DETECTION` | `0.5` | Target detection loop rate (FPS). |
-| `MODEL_BASE_PATH` | `/models` | Base directory for model files. |
+| `MODEL_BASE_PATH` | `/models` | Base directory for model files (relative paths resolve to the project root). |
 | `CLASSIFIER_CONFIDENCE_THRESHOLD` | `0.55` | Classifier confidence threshold for gallery summaries. |
+| `SAVE_REQUIRES_CLASSIFIER` | `False` | Require classifier match + confidence threshold to save detections. |
 | `FUSION_ALPHA` | `0.5` | Detector/classifier fusion weight in UI summaries. |
 | `STREAM_FPS_CAPTURE` | `0` | Capture throttle (0 disables throttling). |
 | `STREAM_FPS` | `0` | UI MJPEG feed throttle (0 disables throttling). |

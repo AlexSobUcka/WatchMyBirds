@@ -21,6 +21,7 @@ DEFAULTS = {
     "MAX_FPS_DETECTION": 0.5,
     "MODEL_BASE_PATH": "/models",
     "CLASSIFIER_CONFIDENCE_THRESHOLD": 0.55,
+    "SAVE_REQUIRES_CLASSIFIER": False,
     "FUSION_ALPHA": 0.5,
     "STREAM_FPS": 0.0,
     "STREAM_FPS_CAPTURE": 0.0,
@@ -54,6 +55,7 @@ RUNTIME_KEYS = {
     "STREAM_FPS_CAPTURE_NIGHT",
     "CLASSIFIER_CONFIDENCE_THRESHOLD",
     "FUSION_ALPHA",
+    "SAVE_REQUIRES_CLASSIFIER",
     "TELEGRAM_COOLDOWN",
     "EDIT_PASSWORD",
     "TELEGRAM_ENABLED",
@@ -113,8 +115,23 @@ def _load_config():
         )
     if os.getenv("DAY_AND_NIGHT_CAPTURE") is not None:
         config["DAY_AND_NIGHT_CAPTURE"] = os.getenv("DAY_AND_NIGHT_CAPTURE")
+    if os.getenv("SAVE_REQUIRES_CLASSIFIER") is not None:
+        config["SAVE_REQUIRES_CLASSIFIER"] = os.getenv("SAVE_REQUIRES_CLASSIFIER")
     if os.getenv("CPU_LIMIT") is not None:
         config["CPU_LIMIT"] = os.getenv("CPU_LIMIT")
+
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    output_dir = os.path.expanduser(str(config.get("OUTPUT_DIR", "")))
+    if output_dir:
+        if not os.path.isabs(output_dir):
+            output_dir = os.path.join(base_dir, output_dir)
+        config["OUTPUT_DIR"] = os.path.normpath(output_dir)
+
+    model_base_path = os.path.expanduser(str(config.get("MODEL_BASE_PATH", "")))
+    if model_base_path:
+        if not os.path.isabs(model_base_path):
+            model_base_path = os.path.join(base_dir, model_base_path)
+        config["MODEL_BASE_PATH"] = os.path.normpath(model_base_path)
 
     # YAML runtime overrides
     yaml_settings = load_settings_yaml(str(config["OUTPUT_DIR"]))
@@ -137,7 +154,12 @@ def get_config():
 def _coerce_config_types(config):
     """Validiert und erzwingt erwartete Typen für zentrale Keys."""
     # Booleans
-    for key in ("DEBUG_MODE", "DAY_AND_NIGHT_CAPTURE", "TELEGRAM_ENABLED"):
+    for key in (
+        "DEBUG_MODE",
+        "DAY_AND_NIGHT_CAPTURE",
+        "TELEGRAM_ENABLED",
+        "SAVE_REQUIRES_CLASSIFIER",
+    ):
         if key in config:
             config[key] = _coerce_bool(config.get(key))
 
@@ -299,7 +321,7 @@ def update_runtime_settings(updates):
 
 
 def _validate_value(key, value):
-    if key in ("DAY_AND_NIGHT_CAPTURE", "TELEGRAM_ENABLED"):
+    if key in ("DAY_AND_NIGHT_CAPTURE", "TELEGRAM_ENABLED", "SAVE_REQUIRES_CLASSIFIER"):
         return True, _coerce_bool(value)
     if key in ("CONFIDENCE_THRESHOLD_DETECTION", "SAVE_THRESHOLD", "CLASSIFIER_CONFIDENCE_THRESHOLD", "FUSION_ALPHA"):
         try:

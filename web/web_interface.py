@@ -2428,7 +2428,11 @@ def create_web_interface(detection_manager):
         layout_children.extend(latest_strip_modals)
         return dbc.Container(layout_children, fluid=True)
 
-    RUNTIME_BOOL_KEYS = {"DAY_AND_NIGHT_CAPTURE", "TELEGRAM_ENABLED"}
+    RUNTIME_BOOL_KEYS = {
+        "DAY_AND_NIGHT_CAPTURE",
+        "TELEGRAM_ENABLED",
+        "SAVE_REQUIRES_CLASSIFIER",
+    }
     RUNTIME_NUMBER_KEYS = {
         "CONFIDENCE_THRESHOLD_DETECTION",
         "SAVE_THRESHOLD",
@@ -2450,6 +2454,7 @@ def create_web_interface(detection_manager):
         "MAX_FPS_DETECTION",
         "CLASSIFIER_CONFIDENCE_THRESHOLD",
         "FUSION_ALPHA",
+        "SAVE_REQUIRES_CLASSIFIER",
         "DAY_AND_NIGHT_CAPTURE",
         "DAY_AND_NIGHT_CAPTURE_LOCATION",
         "STREAM_FPS",
