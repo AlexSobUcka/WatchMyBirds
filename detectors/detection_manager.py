@@ -203,6 +203,15 @@ class DetectionManager:
         self.last_notification_time = time.time()
         self.detection_counter = 0
         self.detection_classes_agg = set()
+        self.last_frame_received_time = time.time()
+        self.last_detection_event_time = time.time()
+        self.last_status_alert_check = 0.0
+        self.camera_offline_alert_active = False
+        self.image_missing_alert_active = False
+        self.no_detection_alert_active = False
+        self.image_missing_seconds = 60
+        self.no_detection_seconds = 5 * 60 * 60
+        self.status_alert_check_interval = 60
 
         # Video capture and detector instances.
         self.video_capture = None
@@ -347,6 +356,53 @@ class DetectionManager:
 
         self._send_daily_summary(today_str)
         self.last_daily_summary_date = today_str
+
+    def _maybe_send_status_alerts(self):
+        if not self.config.get("TELEGRAM_ENABLED", True):
+            return
+        if self.stop_event.is_set():
+            return
+        if self.video_capture is None:
+            return
+        now = time.time()
+        if now - self.last_status_alert_check < self.status_alert_check_interval:
+            return
+        self.last_status_alert_check = now
+
+        camera_running = (
+            self.video_capture is not None and self.video_capture.is_running()
+        )
+        if not camera_running:
+            if not self.camera_offline_alert_active:
+                send_telegram_message("Camera disconnected or stream stopped.")
+                self.camera_offline_alert_active = True
+        else:
+            self.camera_offline_alert_active = False
+
+        if camera_running:
+            missing_for = now - self.last_frame_received_time
+            if missing_for >= self.image_missing_seconds:
+                if not self.image_missing_alert_active:
+                    send_telegram_message(
+                        "No images received from camera for over 60 seconds."
+                    )
+                    self.image_missing_alert_active = True
+            else:
+                self.image_missing_alert_active = False
+
+        location = str(self.config.get("DAY_AND_NIGHT_CAPTURE_LOCATION", "")).strip()
+        is_day = self._is_daytime(location) if location else True
+        if is_day:
+            if now - self.last_detection_event_time >= self.no_detection_seconds:
+                if not self.no_detection_alert_active:
+                    send_telegram_message(
+                        "No detections for more than 5 hours during daylight."
+                    )
+                    self.no_detection_alert_active = True
+            else:
+                self.no_detection_alert_active = False
+        else:
+            self.no_detection_alert_active = False
 
     def _format_daily_summary_message(self, date_str_iso, rows):
         if not rows:
@@ -540,6 +596,9 @@ class DetectionManager:
                 with self.frame_lock:
                     self.latest_raw_frame = frame.copy()
                     self.latest_raw_timestamp = time.time()
+                self.last_frame_received_time = time.time()
+                if self.image_missing_alert_active:
+                    self.image_missing_alert_active = False
             else:
                 # If no new frame for more than 5 seconds, mark it as unavailable
                 if time.time() - self.latest_raw_timestamp > 5:
@@ -626,6 +685,7 @@ class DetectionManager:
                 if self.latest_raw_frame is not None:
                     raw_frame = self.latest_raw_frame.copy()
             if raw_frame is None:
+                self._maybe_send_status_alerts()
                 logger.debug("No raw frame available for detection. Sleeping briefly.")
                 self.previous_frame_hash = None
                 self.consecutive_identical_frames = 0
@@ -696,6 +756,9 @@ class DetectionManager:
                 self.latest_detection_time = time.time()
 
             if object_detected:
+                self.last_detection_event_time = time.time()
+                if self.no_detection_alert_active:
+                    self.no_detection_alert_active = False
                 self._enqueue_processing_job(
                     {
                         "capture_time_precise": capture_time_precise,
@@ -703,6 +766,8 @@ class DetectionManager:
                         "detection_info_list": detection_info_list,
                     }
                 )
+
+            self._maybe_send_status_alerts()
 
             detection_time = time.time() - start_time
             target_duration = 1.0 / self.config["MAX_FPS_DETECTION"]

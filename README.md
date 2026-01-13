@@ -139,6 +139,7 @@ Telegram env vars (read directly by `utils/telegram_notifier.py`, not via `confi
 Telegram rules:
 - `basic`: sends a message per detection burst (throttled by `TELEGRAM_COOLDOWN`).
 - `daily_summary`: sends a daily stats message 20 minutes before sunset and per-species collages (1/4/9 images based on that species' daily count). If no detections, a single message is sent.
+- Status alerts: sends a Telegram message if the camera stream stops, no frames arrive for over 60 seconds, or no detections occur for more than 5 hours during daylight (based on `DAY_AND_NIGHT_CAPTURE_LOCATION`). Daylight errors fall back to daytime to keep alerts running.
 
 Unused settings: none found in current code; all keys in `config.py` are referenced.
 

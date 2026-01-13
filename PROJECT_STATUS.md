@@ -16,6 +16,8 @@ Some Notes:
 ---
 
 ## Recent Changes
+- 2026-01-13: Fixed daylight cache fallback to avoid NameError on invalid locations.
+- 2026-01-13: Added Telegram status alerts for camera offline, missing frames, and 5h no-detection daylight window.
 - 2026-01-13: Day/night daylight check now accepts coordinates in DAY_AND_NIGHT_CAPTURE_LOCATION.
 - 2026-01-13: Daily Telegram summary now sends 20 minutes before sunset instead of a fixed time.
 - 2026-01-04: Added classifier-based save gate (detector + classifier).
