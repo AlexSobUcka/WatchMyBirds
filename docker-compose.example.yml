@@ -26,14 +26,13 @@ services:
       - SAVE_REQUIRES_CLASSIFIER=False                       # Save only if classifier matches detector
       - FUSION_ALPHA=0.5                                     # Fusion weight detector vs classifier
       - DAY_AND_NIGHT_CAPTURE=True                           # Daylight gating
-      - DAY_AND_NIGHT_CAPTURE_LOCATION=Berlin                # City name for daylight check
+      - DAY_AND_NIGHT_CAPTURE_LOCATION=Berlin                # City name or "lat, lon" for daylight check
       - LOCATION_DATA="52.516, 13.377"                       # GPS for EXIF (lat, lon)
       - CPU_LIMIT=1                                          # CPU affinity cap (<=0 disables)
       - TELEGRAM_COOLDOWN=5                                  # Seconds between Telegram alerts
       - TELEGRAM_ENABLED=True                                # Gate sending; tokens/chat IDs remain env-only
       - TELEGRAM_RULE=basic                                  # basic or daily_summary
-      - TELEGRAM_DAILY_SUMMARY_TIME=21:00                    # HH:MM (24h) for daily summary
-      - TELEGRAM_TIMEZONE=Europe/Berlin                      # IANA timezone for daily summary
+      - TELEGRAM_TIMEZONE=Europe/Berlin                      # IANA timezone for sunset-based daily summary
       - EDIT_PASSWORD=SECRET_PASSWORD                        # Password for edit page
       # Telegram credentials (required if Telegram enabled)
       - TELEGRAM_BOT_TOKEN=your_token_here

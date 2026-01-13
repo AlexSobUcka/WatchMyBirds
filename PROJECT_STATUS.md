@@ -16,6 +16,8 @@ Some Notes:
 ---
 
 ## Recent Changes
+- 2026-01-13: Day/night daylight check now accepts coordinates in DAY_AND_NIGHT_CAPTURE_LOCATION.
+- 2026-01-13: Daily Telegram summary now sends 20 minutes before sunset instead of a fixed time.
 - 2026-01-04: Added classifier-based save gate (detector + classifier).
 - 2026-01-04: Added day/night stream FPS overrides for capture and UI.
 - 2026-01-04: Added a helper script to print current sunrise/sunset window and gate status.

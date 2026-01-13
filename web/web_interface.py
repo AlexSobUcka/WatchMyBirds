@@ -2478,7 +2478,6 @@ def create_web_interface(detection_manager):
         "STREAM_WIDTH_OUTPUT_RESIZE",
         "LOCATION_DATA",
         "TELEGRAM_RULE",
-        "TELEGRAM_DAILY_SUMMARY_TIME",
         "TELEGRAM_TIMEZONE",
     ]
 

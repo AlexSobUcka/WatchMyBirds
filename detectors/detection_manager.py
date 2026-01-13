@@ -9,10 +9,12 @@ from config import get_config
 config = get_config()
 import re
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import cv2
 import pytz
+from astral import Observer
 from astral.geocoder import database, lookup
+from astral.sun import sun
 import piexif
 import piexif.helper
 from detectors.detector import Detector
@@ -221,9 +223,6 @@ class DetectionManager:
                 f"Unknown TELEGRAM_RULE '{self.telegram_rule}', falling back to 'basic'."
             )
             self.telegram_rule = "basic"
-        self.telegram_daily_summary_time = str(
-            self.config.get("TELEGRAM_DAILY_SUMMARY_TIME", "21:00")
-        ).strip()
         self.telegram_timezone = self._resolve_telegram_timezone()
         self.last_daily_summary_date = None
 
@@ -274,21 +273,58 @@ class DetectionManager:
                 )
         return pytz.UTC
 
-    def _parse_daily_summary_time(self):
-        raw = self.telegram_daily_summary_time
-        if not raw:
-            return 21, 0
-        parts = raw.split(":")
-        if len(parts) != 2:
-            return 21, 0
+    def _get_daily_summary_schedule(self, now_local):
+        """Berechnet Sendezeitpunkt fuer Tageszusammenfassung vor Sonnenuntergang."""
+        observer = None
+        location_name = str(
+            self.config.get("DAY_AND_NIGHT_CAPTURE_LOCATION", "")
+        ).strip()
+        if location_name:
+            try:
+                if "," in location_name:
+                    lat_str, lon_str = location_name.split(",", 1)
+                    observer = Observer(
+                        latitude=float(lat_str), longitude=float(lon_str)
+                    )
+                else:
+                    city = lookup(location_name, database())
+                    observer = city.observer
+            except Exception as exc:
+                logger.warning(
+                    f"Failed to resolve city '{location_name}' for sunset schedule: {exc}"
+                )
+
+        if observer is None and isinstance(self.location_config, dict):
+            try:
+                latitude = float(self.location_config.get("latitude"))
+                longitude = float(self.location_config.get("longitude"))
+                observer = Observer(latitude=latitude, longitude=longitude)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to build observer from LOCATION_DATA for sunset schedule: "
+                    f"{exc}"
+                )
+
+        if observer is None:
+            logger.warning("No valid location found for sunset-based daily summary.")
+            return None
+
         try:
-            hour = int(parts[0])
-            minute = int(parts[1])
-        except ValueError:
-            return 21, 0
-        if 0 <= hour <= 23 and 0 <= minute <= 59:
-            return hour, minute
-        return 21, 0
+            sun_times = sun(
+                observer,
+                date=now_local.date(),
+                tzinfo=self.telegram_timezone,
+            )
+        except Exception as exc:
+            logger.warning(f"Failed to calculate sun times for daily summary: {exc}")
+            return None
+
+        sunset = sun_times.get("sunset")
+        if not sunset:
+            logger.warning("Sunset time missing for daily summary schedule.")
+            return None
+
+        return sunset - timedelta(minutes=20)
 
     def _maybe_send_daily_summary(self):
         if self.telegram_rule != "daily_summary":
@@ -303,8 +339,9 @@ class DetectionManager:
         if self.last_daily_summary_date == today_str:
             return
 
-        hour, minute = self._parse_daily_summary_time()
-        scheduled = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        scheduled = self._get_daily_summary_schedule(now_local)
+        if not scheduled:
+            return
         if now_local < scheduled:
             return
 

@@ -31,14 +31,13 @@ DEFAULTS = {
     "STREAM_FPS_CAPTURE_NIGHT": None,
     "STREAM_WIDTH_OUTPUT_RESIZE": 560,
     "DAY_AND_NIGHT_CAPTURE": True,
-    "DAY_AND_NIGHT_CAPTURE_LOCATION": "Moscow",
+    "DAY_AND_NIGHT_CAPTURE_LOCATION": "Saint Petersburg",
     "CPU_LIMIT": 8,
     "TELEGRAM_COOLDOWN": 5.0,
     "EDIT_PASSWORD": "SECRET_PASSWORD",
     "TELEGRAM_ENABLED": True,
     "TELEGRAM_RULE": "basic",
-    "TELEGRAM_DAILY_SUMMARY_TIME": "21:00",
-    "TELEGRAM_TIMEZONE": "",
+    "TELEGRAM_TIMEZONE": "Europe/Moscow",
 }
 
 RUNTIME_KEYS = {
@@ -86,7 +85,6 @@ def _load_config():
         "DAY_AND_NIGHT_CAPTURE_LOCATION",
         "EDIT_PASSWORD",
         "TELEGRAM_RULE",
-        "TELEGRAM_DAILY_SUMMARY_TIME",
         "TELEGRAM_TIMEZONE",
     ):
         if os.getenv(key) is not None:

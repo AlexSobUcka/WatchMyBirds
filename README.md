@@ -121,13 +121,12 @@ Set these as environment variables in your `.env` or docker-compose `environment
 | `STREAM_FPS_CAPTURE_NIGHT` | `None` | Optional capture FPS during nighttime; overrides `STREAM_FPS_CAPTURE` when set. |
 | `STREAM_WIDTH_OUTPUT_RESIZE` | `640` | Width for the live stream preview in the UI. |
 | `DAY_AND_NIGHT_CAPTURE` | `True` | Enable sunrise/sunset gating for detections. |
-| `DAY_AND_NIGHT_CAPTURE_LOCATION` | `Berlin` | City name for Astral daylight check. |
+| `DAY_AND_NIGHT_CAPTURE_LOCATION` | `Berlin` | City name for Astral daylight check, or `"lat, lon"` for coordinates (UTC). |
 | `CPU_LIMIT` | `1` | CPU affinity cap (<=0 disables affinity). |
 | `TELEGRAM_COOLDOWN` | `5` | Cooldown (seconds) between Telegram alerts. |
 | `TELEGRAM_ENABLED` | `True` | Enables/disables Telegram sends (tokens remain env-only). |
 | `TELEGRAM_RULE` | `basic` | Notification mode: `basic` (per detection) or `daily_summary`. |
-| `TELEGRAM_DAILY_SUMMARY_TIME` | `21:00` | Daily summary time (HH:MM, 24h) for `daily_summary` mode. |
-| `TELEGRAM_TIMEZONE` | (empty) | IANA timezone for daily summary; falls back to `DAY_AND_NIGHT_CAPTURE_LOCATION` timezone or UTC. |
+| `TELEGRAM_TIMEZONE` | (empty) | IANA timezone for sunset-based daily summary; falls back to `DAY_AND_NIGHT_CAPTURE_LOCATION` timezone or UTC. |
 | `EDIT_PASSWORD` | `SECRET_PASSWORD` | Password for edit page access in the UI. |
 
 Telegram env vars (read directly by `utils/telegram_notifier.py`, not via `config.py`):
@@ -139,7 +138,7 @@ Telegram env vars (read directly by `utils/telegram_notifier.py`, not via `confi
 
 Telegram rules:
 - `basic`: sends a message per detection burst (throttled by `TELEGRAM_COOLDOWN`).
-- `daily_summary`: sends a daily stats message at `TELEGRAM_DAILY_SUMMARY_TIME` and per-species collages (1/4/9 images based on that species' daily count). If no detections, a single message is sent.
+- `daily_summary`: sends a daily stats message 20 minutes before sunset and per-species collages (1/4/9 images based on that species' daily count). If no detections, a single message is sent.
 
 Unused settings: none found in current code; all keys in `config.py` are referenced.
 
