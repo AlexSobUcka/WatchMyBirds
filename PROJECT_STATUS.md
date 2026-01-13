@@ -16,6 +16,7 @@ Some Notes:
 ---
 
 ## Recent Changes
+- 2026-01-13: Added automatic camera reinitialize on missing frames and Windows webcam backend cycling.
 - 2026-01-13: Fixed daylight cache fallback to avoid NameError on invalid locations.
 - 2026-01-13: Added Telegram status alerts for camera offline, missing frames, and 5h no-detection daylight window.
 - 2026-01-13: Day/night daylight check now accepts coordinates in DAY_AND_NIGHT_CAPTURE_LOCATION.

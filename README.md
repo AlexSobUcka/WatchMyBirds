@@ -122,6 +122,7 @@ Set these as environment variables in your `.env` or docker-compose `environment
 | `STREAM_WIDTH_OUTPUT_RESIZE` | `640` | Width for the live stream preview in the UI. |
 | `DAY_AND_NIGHT_CAPTURE` | `True` | Enable sunrise/sunset gating for detections. |
 | `DAY_AND_NIGHT_CAPTURE_LOCATION` | `Berlin` | City name for Astral daylight check, or `"lat, lon"` for coordinates (UTC). |
+| `WEBCAM_BACKEND` | `auto` | Windows webcam backend preference: `auto` cycles `dshow` → `msmf` → default; or force `dshow`, `msmf`, `opencv`. |
 | `CPU_LIMIT` | `1` | CPU affinity cap (<=0 disables affinity). |
 | `TELEGRAM_COOLDOWN` | `5` | Cooldown (seconds) between Telegram alerts. |
 | `TELEGRAM_ENABLED` | `True` | Enables/disables Telegram sends (tokens remain env-only). |
@@ -139,7 +140,7 @@ Telegram env vars (read directly by `utils/telegram_notifier.py`, not via `confi
 Telegram rules:
 - `basic`: sends a message per detection burst (throttled by `TELEGRAM_COOLDOWN`).
 - `daily_summary`: sends a daily stats message 20 minutes before sunset and per-species collages (1/4/9 images based on that species' daily count). If no detections, a single message is sent.
-- Status alerts: sends a Telegram message if the camera stream stops, no frames arrive for over 60 seconds, or no detections occur for more than 5 hours during daylight (based on `DAY_AND_NIGHT_CAPTURE_LOCATION`). Daylight errors fall back to daytime to keep alerts running.
+- Status alerts: sends a Telegram message if the camera stream stops, no frames arrive for over 60 seconds (also triggers a camera reinitialize), or no detections occur for more than 5 hours during daylight (based on `DAY_AND_NIGHT_CAPTURE_LOCATION`). Daylight errors fall back to daytime to keep alerts running.
 
 Unused settings: none found in current code; all keys in `config.py` are referenced.
 

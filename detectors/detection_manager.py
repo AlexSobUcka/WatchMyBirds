@@ -387,6 +387,14 @@ class DetectionManager:
                         "No images received from camera for over 60 seconds."
                     )
                     self.image_missing_alert_active = True
+                    try:
+                        self.video_capture.request_reinitialize(
+                            reason="No frames received for alert window."
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to request camera reinitialization: %s", exc
+                        )
             else:
                 self.image_missing_alert_active = False
 

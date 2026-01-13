@@ -89,6 +89,11 @@ class VideoCapture:
         self.stream_settings_loaded = False
         self._cache_reuse_failed_once = False
         self.runtime_resolution_lock = threading.Lock()
+        self.webcam_backend_preference = str(
+            config.get("WEBCAM_BACKEND", "auto")
+        ).strip().lower()
+        self.webcam_backend_order = self._build_webcam_backend_order()
+        self.webcam_backend_index = 0
 
         logger.debug(
             f"Initialized VideoCapture with source: {self.source}, stream_type: {self.stream_type}"
@@ -641,12 +646,29 @@ class VideoCapture:
         """
         Sets up OpenCV's VideoCapture for webcam streams.
         """
-        logger.info(f"Setting up Webcam with source index: {self.source}")
-        self.cap = cv2.VideoCapture(self.source)
-        if not self.cap.isOpened():
-            error_msg = f"Failed to open webcam with index: {self.source}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
+        last_error = None
+        for backend in self._iter_webcam_backend_candidates():
+            backend_name = self._format_webcam_backend(backend)
+            logger.info(
+                "Setting up Webcam with source index: %s (backend=%s)",
+                self.source,
+                backend_name,
+            )
+            if backend is None:
+                cap = cv2.VideoCapture(self.source)
+            else:
+                cap = cv2.VideoCapture(self.source, backend)
+            if cap.isOpened():
+                self.cap = cap
+                self._set_webcam_backend_index(backend)
+                break
+            last_error = f"Failed to open webcam with index: {self.source}"
+            logger.error("%s (backend=%s)", last_error, backend_name)
+            cap.release()
+            self.cap = None
+
+        if not self.cap or not self.cap.isOpened():
+            raise RuntimeError(last_error or "Failed to open webcam.")
 
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
 
@@ -819,10 +841,19 @@ class VideoCapture:
                     f"OpenCV failed to read frame ({self.failed_reads} consecutive failures)"
                 )
                 if self.failed_reads >= 3:
-                    logger.error(
-                        "Too many OpenCV read failures, switching to FFmpeg fallback."
-                    )
-                    self._switch_to_ffmpeg()
+                    if self.stream_type == self.RTSP:
+                        logger.error(
+                            "Too many OpenCV read failures, switching to FFmpeg fallback."
+                        )
+                        self._switch_to_ffmpeg()
+                    else:
+                        logger.error(
+                            "Too many OpenCV read failures, reinitializing camera."
+                        )
+                        self.failed_reads = 0
+                        self._reinitialize_camera(
+                            reason="Repeated OpenCV read failures."
+                        )
                 return None
         else:
             logger.error("HTTP/RTSP capture not opened.")
@@ -833,6 +864,12 @@ class VideoCapture:
             else:
                 self._reinitialize_camera(reason="Capture not opened.")
             return None
+
+    def request_reinitialize(self, reason="Unknown"):
+        """Plant eine Reinitialisierung fuer die Kamera."""
+        if self.stop_event.is_set() or self.stop_flag:
+            return
+        self._reinitialize_camera(reason=reason)
 
     def _switch_to_ffmpeg(self):
         """Releases OpenCV backend and initializes FFmpeg."""
@@ -996,6 +1033,8 @@ class VideoCapture:
 
         try:
             logger.info(f"Reinitializing camera due to: {reason}")
+            if self.stream_type == self.WEBCAM:
+                self._advance_webcam_backend(reason=reason)
             if self.retry_count >= 5:
                 logger.info(
                     "Maximum retry attempts reached. Scheduling longer delay before next attempt."
@@ -1031,6 +1070,68 @@ class VideoCapture:
             self._schedule_reinit(reason=f"Failed to reinitialize: {e}")
         finally:
             self.reinit_lock.release()
+
+    def _build_webcam_backend_order(self):
+        if os.name != "nt":
+            return [None]
+
+        backend_map = {
+            "dshow": getattr(cv2, "CAP_DSHOW", None),
+            "msmf": getattr(cv2, "CAP_MSMF", None),
+            "opencv": None,
+        }
+        if self.webcam_backend_preference != "auto":
+            backend = backend_map.get(self.webcam_backend_preference)
+            if backend is None and self.webcam_backend_preference not in ("opencv",):
+                logger.warning(
+                    "Requested WEBCAM_BACKEND '%s' is unavailable; falling back to auto.",
+                    self.webcam_backend_preference,
+                )
+            else:
+                return [backend]
+
+        order = []
+        dshow = backend_map.get("dshow")
+        msmf = backend_map.get("msmf")
+        if dshow is not None:
+            order.append(dshow)
+        if msmf is not None and msmf not in order:
+            order.append(msmf)
+        order.append(None)
+        return order
+
+    def _iter_webcam_backend_candidates(self):
+        order = self.webcam_backend_order or [None]
+        start = self.webcam_backend_index % len(order)
+        return order[start:] + order[:start]
+
+    def _set_webcam_backend_index(self, backend):
+        if not self.webcam_backend_order:
+            return
+        try:
+            self.webcam_backend_index = self.webcam_backend_order.index(backend)
+        except ValueError:
+            self.webcam_backend_index = 0
+
+    def _advance_webcam_backend(self, reason=""):
+        order = self.webcam_backend_order or []
+        if len(order) <= 1:
+            return
+        self.webcam_backend_index = (self.webcam_backend_index + 1) % len(order)
+        backend_name = self._format_webcam_backend(
+            self.webcam_backend_order[self.webcam_backend_index]
+        )
+        suffix = f" due to: {reason}" if reason else ""
+        logger.info("Advancing webcam backend to %s%s", backend_name, suffix)
+
+    def _format_webcam_backend(self, backend):
+        if backend is None:
+            return "opencv-default"
+        if backend == getattr(cv2, "CAP_DSHOW", None):
+            return "dshow"
+        if backend == getattr(cv2, "CAP_MSMF", None):
+            return "msmf"
+        return f"backend-{backend}"
 
     def get_frame(self):
         """

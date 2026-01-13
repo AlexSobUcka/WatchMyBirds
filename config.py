@@ -32,6 +32,7 @@ DEFAULTS = {
     "STREAM_WIDTH_OUTPUT_RESIZE": 560,
     "DAY_AND_NIGHT_CAPTURE": True,
     "DAY_AND_NIGHT_CAPTURE_LOCATION": "Saint Petersburg",
+    "WEBCAM_BACKEND": "auto",
     "CPU_LIMIT": 8,
     "TELEGRAM_COOLDOWN": 5.0,
     "EDIT_PASSWORD": "SECRET_PASSWORD",
@@ -83,6 +84,7 @@ def _load_config():
         "DETECTOR_MODEL_CHOICE",
         "MODEL_BASE_PATH",
         "DAY_AND_NIGHT_CAPTURE_LOCATION",
+        "WEBCAM_BACKEND",
         "EDIT_PASSWORD",
         "TELEGRAM_RULE",
         "TELEGRAM_TIMEZONE",
@@ -236,6 +238,11 @@ def _coerce_config_types(config):
         )
     except Exception:
         config["STREAM_WIDTH_OUTPUT_RESIZE"] = 640
+
+    webcam_backend = str(config.get("WEBCAM_BACKEND", "auto")).strip().lower()
+    if webcam_backend not in ("auto", "dshow", "msmf", "opencv"):
+        webcam_backend = DEFAULTS["WEBCAM_BACKEND"]
+    config["WEBCAM_BACKEND"] = webcam_backend
 
 
 def _coerce_bool(value):
