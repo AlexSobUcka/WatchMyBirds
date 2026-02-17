@@ -34,6 +34,15 @@ from utils.db import (
     fetch_daily_species_summary,
 )
 from utils.daylight import is_daytime
+from utils.collage import (
+    build_candidate,
+    build_square_tile,
+    has_black_border,
+    load_image_rgb,
+    parse_timestamp,
+    select_collage_candidates,
+    trim_dark_borders,
+)
 
 """
 This module defines the DetectionManager class, which orchestrates video frame acquisition,
@@ -209,6 +218,9 @@ class DetectionManager:
         self.camera_offline_alert_active = False
         self.image_missing_alert_active = False
         self.no_detection_alert_active = False
+        self.daylight_no_detection_seconds = 0.0
+        self.last_daylight_check_ts = time.time()
+        self.last_daylight_state = False
         self.image_missing_seconds = 60
         self.no_detection_seconds = 5 * 60 * 60
         self.status_alert_check_interval = 60
@@ -260,7 +272,9 @@ class DetectionManager:
     # >>> Daytime Check Function >>>
     def _is_daytime(self, city_name):
         """Ermittelt Tageslichtstatus fuer die Detektion."""
-        return is_daytime(city_name, self._daytime_cache, self._daytime_ttl)
+        return is_daytime(
+            city_name, self._daytime_cache, self._daytime_ttl, self.telegram_timezone
+        )
 
     def _resolve_telegram_timezone(self):
         tz_name = str(self.config.get("TELEGRAM_TIMEZONE", "")).strip()
@@ -401,8 +415,22 @@ class DetectionManager:
         location = str(self.config.get("DAY_AND_NIGHT_CAPTURE_LOCATION", "")).strip()
         is_day = self._is_daytime(location) if location else True
         if is_day:
-            if now - self.last_detection_event_time >= self.no_detection_seconds:
+            if not self.last_daylight_state:
+                self.last_daylight_check_ts = now
+            else:
+                self.daylight_no_detection_seconds += now - self.last_daylight_check_ts
+                self.last_daylight_check_ts = now
+            self.last_daylight_state = True
+            if self.daylight_no_detection_seconds >= self.no_detection_seconds:
                 if not self.no_detection_alert_active:
+                    logger.info(
+                        "No-detection daylight alert triggered: accumulated=%.1fs, "
+                        "threshold=%.1fs, last_daylight_state=%s, last_check_ts=%.0f",
+                        self.daylight_no_detection_seconds,
+                        self.no_detection_seconds,
+                        self.last_daylight_state,
+                        self.last_daylight_check_ts,
+                    )
                     send_telegram_message(
                         "No detections for more than 5 hours during daylight."
                     )
@@ -410,6 +438,10 @@ class DetectionManager:
             else:
                 self.no_detection_alert_active = False
         else:
+            if self.last_daylight_state:
+                self.daylight_no_detection_seconds = 0.0
+            self.last_daylight_state = False
+            self.last_daylight_check_ts = now
             self.no_detection_alert_active = False
 
     def _format_daily_summary_message(self, date_str_iso, rows):
@@ -435,31 +467,17 @@ class DetectionManager:
     def _select_collage_paths(self, items):
         if not items:
             return []
-        if len(items) >= 9:
-            limit = 9
-        elif len(items) >= 4:
-            limit = 4
-        else:
-            limit = 1
-        items_sorted = sorted(items, key=lambda x: x[0], reverse=True)
-        return [path for _, path in items_sorted[:limit]]
+        selected = select_collage_candidates(items, self.config)
+        return [item["path"] for item in selected]
 
     def _load_square_image(self, image_path, size_px):
-        try:
-            image = Image.open(image_path).convert("RGB")
-        except Exception as e:
-            logger.warning(f"Failed to open image '{image_path}': {e}")
+        image = load_image_rgb(image_path)
+        if image is None:
+            logger.warning(f"Failed to open image '{image_path}'.")
             return None
-
-        width, height = image.size
-        if width != height:
-            side = min(width, height)
-            left = int((width - side) / 2)
-            top = int((height - side) / 2)
-            image = image.crop((left, top, left + side, top + side))
-
-        resample = getattr(Image, "Resampling", Image).LANCZOS
-        return image.resize((size_px, size_px), resample)
+        if bool(self.config.get("COLLAGE_AVOID_BLACK_BORDERS", True)):
+            image = trim_dark_borders(image)
+        return build_square_tile(image, size_px)
 
     def _build_collage(self, image_paths, output_path):
         if not image_paths:
@@ -497,18 +515,51 @@ class DetectionManager:
                 continue
             zoomed_name = row["zoomed_name"] or ""
             optimized_name = row["optimized_name"] or ""
-            filename = zoomed_name if zoomed_name else optimized_name
-            if not filename:
+            zoomed_path = (
+                os.path.join(self.output_dir, date_prefix, zoomed_name)
+                if zoomed_name
+                else ""
+            )
+            optimized_path = (
+                os.path.join(self.output_dir, date_prefix, optimized_name)
+                if optimized_name
+                else ""
+            )
+            prefer_zoomed = bool(self.config.get("COLLAGE_USE_ZOOMED", True))
+            avoid_black = bool(self.config.get("COLLAGE_AVOID_BLACK_BORDERS", True))
+            selected_path = ""
+            selected_image = None
+            if prefer_zoomed and zoomed_path and os.path.exists(zoomed_path):
+                selected_image = load_image_rgb(zoomed_path)
+                if selected_image is None:
+                    selected_path = ""
+                elif avoid_black and has_black_border(selected_image):
+                    selected_path = ""
+                else:
+                    selected_path = zoomed_path
+            if not selected_path and optimized_path and os.path.exists(optimized_path):
+                selected_path = optimized_path
+                selected_image = load_image_rgb(optimized_path)
+            if not selected_path or selected_image is None:
                 continue
-            full_path = os.path.join(self.output_dir, date_prefix, filename)
-            if not os.path.exists(full_path):
-                continue
+            if avoid_black:
+                selected_image = trim_dark_borders(selected_image)
             confidence = row["top1_confidence"]
             try:
                 confidence = float(confidence) if confidence is not None else 0.0
             except Exception:
                 confidence = 0.0
-            images_by_species.setdefault(species, []).append((confidence, full_path))
+            timestamp_value = parse_timestamp(row["timestamp"] or "")
+            candidate = build_candidate(
+                selected_path,
+                confidence,
+                timestamp_value,
+                self.config,
+                image=selected_image,
+            )
+            if candidate is None:
+                continue
+            images_by_species.setdefault(species, []).append(candidate)
         return images_by_species
 
     def _send_daily_summary(self, date_str_iso):
@@ -621,16 +672,15 @@ class DetectionManager:
                 time.sleep(0.1)
 
     # >>> Create Square Crop Function >>>
-    def create_square_crop(self, image, bbox, margin_percent=0.2, pad_color=(0, 0, 0)):
+    def create_square_crop(self, image, bbox, margin_percent=0.2, pad_color=None):
         """
-        Creates a square crop centered on the object defined by bbox, adding padding if necessary
-        so that the output is always a full square with the object centered.
+        Erstellt einen quadratischen Zuschnitt um das Objekt und gleicht Randbereiche aus.
 
         Args:
             image (np.ndarray): The source image.
             bbox (tuple): Bounding box as (x1, y1, x2, y2).
             margin_percent (float): Extra margin percentage to add around the bbox.
-            pad_color (tuple): Color for padding (default is black).
+            pad_color (tuple): Farbe fuer Randbereiche, falls konstant gepolstert wird.
 
         Returns:
             np.ndarray: The square cropped image.
@@ -656,14 +706,20 @@ class DetectionManager:
         pad_top = crop_y1 - desired_y1
         pad_right = desired_x2 - crop_x2
         pad_bottom = desired_y2 - crop_y2
+        if pad_color is None:
+            border_type = cv2.BORDER_REFLECT_101
+            border_value = 0
+        else:
+            border_type = cv2.BORDER_CONSTANT
+            border_value = pad_color
         square_crop = cv2.copyMakeBorder(
             crop,
             pad_top,
             pad_bottom,
             pad_left,
             pad_right,
-            borderType=cv2.BORDER_CONSTANT,
-            value=pad_color,
+            borderType=border_type,
+            value=border_value,
         )
         return square_crop
 
@@ -727,6 +783,7 @@ class DetectionManager:
                 self.config["DAY_AND_NIGHT_CAPTURE"]
                 and not self._is_daytime(self.config["DAY_AND_NIGHT_CAPTURE_LOCATION"])
             ):
+                self._maybe_send_status_alerts()
                 logger.info("Not enough light for detection. Sleeping for 60 seconds.")
                 time.sleep(60)
                 continue
@@ -765,6 +822,8 @@ class DetectionManager:
 
             if object_detected:
                 self.last_detection_event_time = time.time()
+                self.daylight_no_detection_seconds = 0.0
+                self.last_daylight_check_ts = self.last_detection_event_time
                 if self.no_detection_alert_active:
                     self.no_detection_alert_active = False
                 self._enqueue_processing_job(

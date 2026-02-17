@@ -121,13 +121,28 @@ Set these as environment variables in your `.env` or docker-compose `environment
 | `STREAM_FPS_CAPTURE_NIGHT` | `None` | Optional capture FPS during nighttime; overrides `STREAM_FPS_CAPTURE` when set. |
 | `STREAM_WIDTH_OUTPUT_RESIZE` | `640` | Width for the live stream preview in the UI. |
 | `DAY_AND_NIGHT_CAPTURE` | `True` | Enable sunrise/sunset gating for detections. |
-| `DAY_AND_NIGHT_CAPTURE_LOCATION` | `Berlin` | City name for Astral daylight check, or `"lat, lon"` for coordinates (UTC). |
+| `DAY_AND_NIGHT_CAPTURE_LOCATION` | `Berlin` | City name for Astral daylight check, or `"lat, lon"` for coordinates (uses `TELEGRAM_TIMEZONE` or UTC fallback). |
 | `WEBCAM_BACKEND` | `auto` | Windows webcam backend preference: `auto` cycles `dshow` → `msmf` → default; or force `dshow`, `msmf`, `opencv`. |
 | `CPU_LIMIT` | `1` | CPU affinity cap (<=0 disables affinity). |
 | `TELEGRAM_COOLDOWN` | `5` | Cooldown (seconds) between Telegram alerts. |
 | `TELEGRAM_ENABLED` | `True` | Enables/disables Telegram sends (tokens remain env-only). |
 | `TELEGRAM_RULE` | `basic` | Notification mode: `basic` (per detection) or `daily_summary`. |
-| `TELEGRAM_TIMEZONE` | (empty) | IANA timezone for sunset-based daily summary; falls back to `DAY_AND_NIGHT_CAPTURE_LOCATION` timezone or UTC. |
+| `TELEGRAM_TIMEZONE` | (empty) | IANA timezone for sunset-based daily summary and coordinate-based daylight checks; falls back to `DAY_AND_NIGHT_CAPTURE_LOCATION` timezone or UTC. |
+| `COLLAGE_MAX_IMAGES` | `9` | Max images per species collage (grid uses 1/4/9 up to this cap). |
+| `COLLAGE_MIN_CONFIDENCE` | `0.0` | Minimum classifier confidence for collage candidates. |
+| `COLLAGE_MIN_BRIGHTNESS` | `0.0` | Minimum normalized brightness (0..1) for collage candidates. |
+| `COLLAGE_MIN_SHARPNESS` | `0.0` | Minimum Laplacian variance for collage candidates. |
+| `COLLAGE_SHARPNESS_TARGET` | `120.0` | Sharpness target for score normalization. |
+| `COLLAGE_MIN_TIME_GAP_MINUTES` | `20.0` | Minimum time gap between selected photos (minutes). |
+| `COLLAGE_DHASH_THRESHOLD` | `10` | Minimum dHash distance for diversity (0 disables). |
+| `COLLAGE_CONFIDENCE_WEIGHT` | `1.0` | Score weight for classifier confidence. |
+| `COLLAGE_BRIGHTNESS_WEIGHT` | `0.3` | Score weight for brightness. |
+| `COLLAGE_SHARPNESS_WEIGHT` | `0.2` | Score weight for sharpness. |
+| `COLLAGE_USE_ZOOMED` | `True` | Prefer zoomed crops for collages when available. |
+| `COLLAGE_AVOID_BLACK_BORDERS` | `True` | Skip zoomed crops with dark borders and trim dark borders in collage tiles (fallback to optimized images). |
+| `COLLAGE_BLACK_BORDER_THRESHOLD` | `0.05` | Border darkness threshold (0..1) for detecting black bars. |
+| `COLLAGE_BLACK_BORDER_RATIO` | `0.08` | Border thickness ratio for detecting black bars. |
+| `COLLAGE_DEBUG` | `False` | Log collage selection statistics for debugging. |
 | `EDIT_PASSWORD` | `SECRET_PASSWORD` | Password for edit page access in the UI. |
 
 Telegram env vars (read directly by `utils/telegram_notifier.py`, not via `config.py`):
@@ -140,7 +155,7 @@ Telegram env vars (read directly by `utils/telegram_notifier.py`, not via `confi
 Telegram rules:
 - `basic`: sends a message per detection burst (throttled by `TELEGRAM_COOLDOWN`).
 - `daily_summary`: sends a daily stats message 20 minutes before sunset and per-species collages (1/4/9 images based on that species' daily count). If no detections, a single message is sent.
-- Status alerts: sends a Telegram message if the camera stream stops, no frames arrive for over 60 seconds (also triggers a camera reinitialize), or no detections occur for more than 5 hours during daylight (based on `DAY_AND_NIGHT_CAPTURE_LOCATION`). Daylight errors fall back to daytime to keep alerts running.
+- Status alerts: sends a Telegram message if the camera stream stops, no frames arrive for over 60 seconds (also triggers a camera reinitialize), or no detections occur for more than 5 hours of accumulated daylight (based on `DAY_AND_NIGHT_CAPTURE_LOCATION`, with `TELEGRAM_TIMEZONE` applied for coordinates; the daylight counter resets at night). Status checks still run when daylight gating pauses detection to avoid overnight accumulation, and the no-detection alert now logs its daylight counters when it fires. Daylight errors fall back to daytime to keep alerts running.
 
 Unused settings: none found in current code; all keys in `config.py` are referenced.
 
@@ -276,6 +291,9 @@ Windows notes:
 
 Day/night check helper:
 - Run `python scripts/check_daylight.py` to print the current sunrise/sunset window and whether the gate is active for the configured location.
+- Run `python scripts/build_collages_recent.py` to generate collages for the last three days for tuning selection settings.
+- Run `python scripts/build_top_images.py --species <name> --mode brightness` to save top-N images for a species by brightness/confidence/sharpness into `OUTPUT_DIR/telegram/top_images/` (script adds the repo root to `PYTHONPATH`).
+- Use `--all` to process every species and `--modes brightness,combo_score` (or `--modes all`) to run multiple modes in one go.
 
 ---
 

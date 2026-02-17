@@ -39,6 +39,21 @@ DEFAULTS = {
     "TELEGRAM_ENABLED": True,
     "TELEGRAM_RULE": "basic",
     "TELEGRAM_TIMEZONE": "Europe/Moscow",
+    "COLLAGE_MAX_IMAGES": 9,
+    "COLLAGE_MIN_CONFIDENCE": 0.0,
+    "COLLAGE_MIN_BRIGHTNESS": 0.0,
+    "COLLAGE_MIN_SHARPNESS": 0.0,
+    "COLLAGE_SHARPNESS_TARGET": 120.0,
+    "COLLAGE_MIN_TIME_GAP_MINUTES": 20.0,
+    "COLLAGE_DHASH_THRESHOLD": 10,
+    "COLLAGE_CONFIDENCE_WEIGHT": 1.0,
+    "COLLAGE_BRIGHTNESS_WEIGHT": 0.3,
+    "COLLAGE_SHARPNESS_WEIGHT": 0.2,
+    "COLLAGE_USE_ZOOMED": True,
+    "COLLAGE_AVOID_BLACK_BORDERS": True,
+    "COLLAGE_BLACK_BORDER_THRESHOLD": 0.05,
+    "COLLAGE_BLACK_BORDER_RATIO": 0.08,
+    "COLLAGE_DEBUG": False,
 }
 
 RUNTIME_KEYS = {
@@ -59,6 +74,21 @@ RUNTIME_KEYS = {
     "TELEGRAM_COOLDOWN",
     "EDIT_PASSWORD",
     "TELEGRAM_ENABLED",
+    "COLLAGE_MAX_IMAGES",
+    "COLLAGE_MIN_CONFIDENCE",
+    "COLLAGE_MIN_BRIGHTNESS",
+    "COLLAGE_MIN_SHARPNESS",
+    "COLLAGE_SHARPNESS_TARGET",
+    "COLLAGE_MIN_TIME_GAP_MINUTES",
+    "COLLAGE_DHASH_THRESHOLD",
+    "COLLAGE_CONFIDENCE_WEIGHT",
+    "COLLAGE_BRIGHTNESS_WEIGHT",
+    "COLLAGE_SHARPNESS_WEIGHT",
+    "COLLAGE_USE_ZOOMED",
+    "COLLAGE_AVOID_BLACK_BORDERS",
+    "COLLAGE_BLACK_BORDER_THRESHOLD",
+    "COLLAGE_BLACK_BORDER_RATIO",
+    "COLLAGE_DEBUG",
 }
 
 BOOT_KEYS = set(DEFAULTS.keys()) - RUNTIME_KEYS
@@ -105,6 +135,18 @@ def _load_config():
         "STREAM_FPS_CAPTURE_DAY",
         "STREAM_FPS_CAPTURE_NIGHT",
         "TELEGRAM_COOLDOWN",
+        "COLLAGE_MAX_IMAGES",
+        "COLLAGE_MIN_CONFIDENCE",
+        "COLLAGE_MIN_BRIGHTNESS",
+        "COLLAGE_MIN_SHARPNESS",
+        "COLLAGE_SHARPNESS_TARGET",
+        "COLLAGE_MIN_TIME_GAP_MINUTES",
+        "COLLAGE_DHASH_THRESHOLD",
+        "COLLAGE_CONFIDENCE_WEIGHT",
+        "COLLAGE_BRIGHTNESS_WEIGHT",
+        "COLLAGE_SHARPNESS_WEIGHT",
+        "COLLAGE_BLACK_BORDER_THRESHOLD",
+        "COLLAGE_BLACK_BORDER_RATIO",
     ):
         if os.getenv(key) is not None:
             config[key] = os.getenv(key)
@@ -117,6 +159,12 @@ def _load_config():
         config["DAY_AND_NIGHT_CAPTURE"] = os.getenv("DAY_AND_NIGHT_CAPTURE")
     if os.getenv("SAVE_REQUIRES_CLASSIFIER") is not None:
         config["SAVE_REQUIRES_CLASSIFIER"] = os.getenv("SAVE_REQUIRES_CLASSIFIER")
+    if os.getenv("COLLAGE_USE_ZOOMED") is not None:
+        config["COLLAGE_USE_ZOOMED"] = os.getenv("COLLAGE_USE_ZOOMED")
+    if os.getenv("COLLAGE_AVOID_BLACK_BORDERS") is not None:
+        config["COLLAGE_AVOID_BLACK_BORDERS"] = os.getenv(
+            "COLLAGE_AVOID_BLACK_BORDERS"
+        )
     if os.getenv("CPU_LIMIT") is not None:
         config["CPU_LIMIT"] = os.getenv("CPU_LIMIT")
 
@@ -159,6 +207,9 @@ def _coerce_config_types(config):
         "DAY_AND_NIGHT_CAPTURE",
         "TELEGRAM_ENABLED",
         "SAVE_REQUIRES_CLASSIFIER",
+        "COLLAGE_USE_ZOOMED",
+        "COLLAGE_AVOID_BLACK_BORDERS",
+        "COLLAGE_DEBUG",
     ):
         if key in config:
             config[key] = _coerce_bool(config.get(key))
@@ -218,12 +269,14 @@ def _coerce_config_types(config):
         "SAVE_THRESHOLD",
         "CLASSIFIER_CONFIDENCE_THRESHOLD",
         "FUSION_ALPHA",
+        "COLLAGE_MIN_CONFIDENCE",
+        "COLLAGE_MIN_BRIGHTNESS",
     ):
         try:
-            val = float(config.get(key, 0.55))
+            val = float(config.get(key, DEFAULTS.get(key, 0.0)))
             config[key] = max(0.0, min(1.0, val))
         except Exception:
-            config[key] = 0.55
+            config[key] = DEFAULTS.get(key, 0.0)
 
     for key in ("MAX_FPS_DETECTION", "TELEGRAM_COOLDOWN"):
         try:
@@ -231,6 +284,53 @@ def _coerce_config_types(config):
             config[key] = val
         except Exception:
             config[key] = DEFAULTS.get(key, 0.0)
+
+    for key in (
+        "COLLAGE_MIN_SHARPNESS",
+        "COLLAGE_SHARPNESS_TARGET",
+        "COLLAGE_MIN_TIME_GAP_MINUTES",
+    ):
+        try:
+            val = float(config.get(key, DEFAULTS.get(key, 0.0)))
+            config[key] = max(0.0, val)
+        except Exception:
+            config[key] = DEFAULTS.get(key, 0.0)
+
+    for key in (
+        "COLLAGE_BLACK_BORDER_THRESHOLD",
+        "COLLAGE_BLACK_BORDER_RATIO",
+    ):
+        try:
+            val = float(config.get(key, DEFAULTS.get(key, 0.0)))
+            config[key] = max(0.0, min(1.0, val))
+        except Exception:
+            config[key] = DEFAULTS.get(key, 0.0)
+
+    for key in (
+        "COLLAGE_CONFIDENCE_WEIGHT",
+        "COLLAGE_BRIGHTNESS_WEIGHT",
+        "COLLAGE_SHARPNESS_WEIGHT",
+    ):
+        try:
+            val = float(config.get(key, DEFAULTS.get(key, 0.0)))
+            config[key] = max(0.0, val)
+        except Exception:
+            config[key] = DEFAULTS.get(key, 0.0)
+
+    try:
+        config["COLLAGE_DHASH_THRESHOLD"] = max(
+            0, int(float(config.get("COLLAGE_DHASH_THRESHOLD", 0)))
+        )
+    except Exception:
+        config["COLLAGE_DHASH_THRESHOLD"] = DEFAULTS.get("COLLAGE_DHASH_THRESHOLD", 0)
+
+    for key in ("COLLAGE_MAX_IMAGES",):
+        try:
+            val = int(float(config.get(key, DEFAULTS.get(key, 0))))
+            if key == "COLLAGE_MAX_IMAGES":
+                config[key] = max(1, val)
+        except Exception:
+            config[key] = DEFAULTS.get(key, 0)
 
     try:
         config["STREAM_WIDTH_OUTPUT_RESIZE"] = int(
@@ -326,9 +426,23 @@ def update_runtime_settings(updates):
 
 
 def _validate_value(key, value):
-    if key in ("DAY_AND_NIGHT_CAPTURE", "TELEGRAM_ENABLED", "SAVE_REQUIRES_CLASSIFIER"):
+    if key in (
+        "DAY_AND_NIGHT_CAPTURE",
+        "TELEGRAM_ENABLED",
+        "SAVE_REQUIRES_CLASSIFIER",
+        "COLLAGE_USE_ZOOMED",
+        "COLLAGE_AVOID_BLACK_BORDERS",
+        "COLLAGE_DEBUG",
+    ):
         return True, _coerce_bool(value)
-    if key in ("CONFIDENCE_THRESHOLD_DETECTION", "SAVE_THRESHOLD", "CLASSIFIER_CONFIDENCE_THRESHOLD", "FUSION_ALPHA"):
+    if key in (
+        "CONFIDENCE_THRESHOLD_DETECTION",
+        "SAVE_THRESHOLD",
+        "CLASSIFIER_CONFIDENCE_THRESHOLD",
+        "FUSION_ALPHA",
+        "COLLAGE_MIN_CONFIDENCE",
+        "COLLAGE_MIN_BRIGHTNESS",
+    ):
         try:
             val = float(value)
         except Exception:
@@ -361,6 +475,39 @@ def _validate_value(key, value):
         except Exception:
             return False, None
         if val > 0.0:
+            return True, val
+        return False, None
+    if key in (
+        "COLLAGE_MIN_SHARPNESS",
+        "COLLAGE_SHARPNESS_TARGET",
+        "COLLAGE_MIN_TIME_GAP_MINUTES",
+        "COLLAGE_CONFIDENCE_WEIGHT",
+        "COLLAGE_BRIGHTNESS_WEIGHT",
+        "COLLAGE_SHARPNESS_WEIGHT",
+    ):
+        try:
+            val = float(value)
+        except Exception:
+            return False, None
+        if val >= 0.0:
+            return True, val
+        return False, None
+    if key in ("COLLAGE_DHASH_THRESHOLD", "COLLAGE_MAX_IMAGES"):
+        try:
+            val = int(float(value))
+        except Exception:
+            return False, None
+        if key == "COLLAGE_MAX_IMAGES":
+            return (val > 0), val
+        if val >= 0:
+            return True, val
+        return False, None
+    if key in ("COLLAGE_BLACK_BORDER_THRESHOLD", "COLLAGE_BLACK_BORDER_RATIO"):
+        try:
+            val = float(value)
+        except Exception:
+            return False, None
+        if 0.0 <= val <= 1.0:
             return True, val
         return False, None
     if key in ("DAY_AND_NIGHT_CAPTURE_LOCATION", "EDIT_PASSWORD"):

@@ -16,6 +16,17 @@ Some Notes:
 ---
 
 ## Recent Changes
+- 2026-02-03: Top-images script can process all species and multiple modes per run.
+- 2026-02-03: Top-images script now injects repo root into PYTHONPATH for direct execution.
+- 2026-02-03: Added a script to export top-N images per species by brightness/confidence/sharpness from the full database.
+- 2026-02-03: No-detection daylight alert logs its accumulated/threshold counters when it triggers.
+- 2026-02-03: Status alert checks now run during daylight gating to prevent overnight daylight accumulation for no-detection alerts.
+- 2026-02-01: Added optional collage selection debug logging to explain filtering outcomes.
+- 2026-02-01: Collage selection now buckets by time/hash to keep output monotonic when tightening filters.
+- 2026-02-01: Collage tiles now trim dark borders when requested, reducing black padding in generated collages.
+- 2026-02-01: Collage selection now supports configurable quality/diversity filters; zoomed crops avoid black padding and a helper script builds collages for the last three days.
+- 2026-02-01: No-detection alert now accumulates daylight-only time and resets at night to avoid sunrise false positives.
+- 2026-01-15: Daylight checks now apply TELEGRAM_TIMEZONE for coordinate locations to align no-detection alerts with local sunrise; updated daylight helper accordingly.
 - 2026-01-13: Added automatic camera reinitialize on missing frames and Windows webcam backend cycling.
 - 2026-01-13: Fixed daylight cache fallback to avoid NameError on invalid locations.
 - 2026-01-13: Added Telegram status alerts for camera offline, missing frames, and 5h no-detection daylight window.
